@@ -1,19 +1,20 @@
 import express from "express"
 import crypto from "crypto"
+import cors from "cors"
 import { createClient } from "@supabase/supabase-js"
 
 const app = express()
 
-// Use raw body only for NOWPayments IPN verification
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}))
+
 app.use((req, res, next) => {
   if (req.path === "/api/nowpayments/ipn") return next()
   express.json()(req, res, next)
 })
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-)
 
 const PACKAGES = {
   starter_10: { usd: 10, credits: 1000, label: "$10 → 1000 credits" },
