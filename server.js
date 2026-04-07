@@ -28,7 +28,7 @@ app.get("/", (req, res) => {
 
 app.post("/api/nowpayments/create-payment", async (req, res) => {
   try {
-    const { userId, packageId, payCurrency = "usdttrc20" } = req.body
+    const { userId, packageId, payCurrency = "ltc" } = req.body
     const pkg = PACKAGES[packageId]
 
     if (!userId || !pkg) {
