@@ -22,6 +22,7 @@ const supabase = createClient(
 )
 
 const PACKAGES = {
+  test_1: { usd: 1, credits: 100, label: "$1 → 100 credits" },
   starter_10: { usd: 10, credits: 1000, label: "$10 → 1000 credits" },
   growth_25: { usd: 25, credits: 2750, label: "$25 → 2750 credits" },
   pro_50: { usd: 50, credits: 6000, label: "$50 → 6000 credits" },
