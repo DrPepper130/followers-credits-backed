@@ -16,6 +16,11 @@ app.use((req, res, next) => {
   express.json()(req, res, next)
 })
 
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+)
+
 const PACKAGES = {
   starter_10: { usd: 10, credits: 1000, label: "$10 → 1000 credits" },
   growth_25: { usd: 25, credits: 2750, label: "$25 → 2750 credits" },
