@@ -217,7 +217,6 @@ app.post(
 app.post("/api/orders/create", async (req, res) => {
   try {
     const authHeader = req.headers.authorization || ""
-
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.slice(7)
       : null
@@ -245,15 +244,11 @@ app.post("/api/orders/create", async (req, res) => {
     const cleanQuantity = Number(quantity)
 
     if (!cleanUsername) {
-      return res.status(400).json({
-        error: "Instagram username required",
-      })
+      return res.status(400).json({ error: "Instagram username required" })
     }
 
     if (!Number.isFinite(cleanQuantity) || cleanQuantity <= 0) {
-      return res.status(400).json({
-        error: "Quantity must be positive",
-      })
+      return res.status(400).json({ error: "Quantity must be positive" })
     }
 
     const PRODUCTS = {
@@ -271,18 +266,22 @@ app.post("/api/orders/create", async (req, res) => {
       return res.status(400).json({ error: "Invalid product" })
     }
 
+    if (cleanQuantity < product.minQty || cleanQuantity > product.maxQty) {
+      return res.status(400).json({
+        error: `Quantity must be between ${product.minQty} and ${product.maxQty}`,
+      })
+    }
+
     const creditCost = cleanQuantity * product.creditsPerUnit
 
-    const { data: wallet } = await supabase
+    const { data: wallet, error: walletErr } = await supabase
       .from("wallets")
       .select("credit_balance")
       .eq("user_id", user.id)
       .single()
 
-    if (!wallet) {
-      return res.status(500).json({
-        error: "Wallet not found",
-      })
+    if (walletErr || !wallet) {
+      return res.status(500).json({ error: "Wallet not found" })
     }
 
     if (wallet.credit_balance < creditCost) {
@@ -295,29 +294,54 @@ app.post("/api/orders/create", async (req, res) => {
 
     const newBalance = wallet.credit_balance - creditCost
 
-    const { data: order } = await supabase
+    const { data: order, error: orderErr } = await supabase
       .from("orders")
       .insert({
         user_id: user.id,
         product_name: product.name,
+        quantity: cleanQuantity,
+        instagram_username: cleanUsername,
         amount: creditCost,
         status: "pending",
       })
       .select()
       .single()
 
-    await supabase
+    if (orderErr || !order) {
+      return res.status(500).json({
+        error: "Failed to create order",
+        details: orderErr?.message || "Unknown order error",
+      })
+    }
+
+    const { error: updateWalletErr } = await supabase
       .from("wallets")
       .update({ credit_balance: newBalance })
       .eq("user_id", user.id)
 
-    await supabase.from("credit_transactions").insert({
-      user_id: user.id,
-      amount: -creditCost,
-      type: "purchase",
-    })
+    if (updateWalletErr) {
+      return res.status(500).json({
+        error: "Failed to deduct credits",
+        details: updateWalletErr.message,
+      })
+    }
 
-    await fetch(process.env.MAKE_WEBHOOK_URL, {
+    const { error: txErr } = await supabase
+      .from("credit_transactions")
+      .insert({
+        user_id: user.id,
+        amount: -creditCost,
+        type: "purchase",
+      })
+
+    if (txErr) {
+      return res.status(500).json({
+        error: "Failed to log transaction",
+        details: txErr.message,
+      })
+    }
+
+    const makeRes = await fetch(process.env.MAKE_WEBHOOK_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -333,65 +357,34 @@ app.post("/api/orders/create", async (req, res) => {
       }),
     })
 
-    await supabase
+    if (!makeRes.ok) {
+      return res.status(500).json({
+        error: "Order created, but Make webhook failed",
+        details: `Webhook responded with status ${makeRes.status}`,
+      })
+    }
+
+    const { error: updateOrderStatusErr } = await supabase
       .from("orders")
-      .update({ status: "submitted" })
+      .update({ status: "completed" })
       .eq("id", order.id)
+
+    if (updateOrderStatusErr) {
+      return res.status(500).json({
+        error: "Failed to update order status",
+        details: updateOrderStatusErr.message,
+      })
+    }
 
     return res.json({
       success: true,
       orderId: order.id,
+      productName: product.name,
+      quantity: cleanQuantity,
       creditCost,
+      status: "completed",
       newBalance,
     })
-  } catch (err) {
-    return res.status(500).json({
-      error: "Server error",
-      details: String(err),
-    })
-  }
-})
-
-const PORT = process.env.PORT || 3000
-
-app.listen(PORT, () => {
-  console.log(`Server listening on ${PORT}`)
-})
-
-
-
-app.get("/api/orders/my-orders", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization || ""
-
-    const token = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7)
-      : null
-
-    if (!token) {
-      return res.status(401).json({ error: "Missing auth token" })
-    }
-
-    const {
-      data: { user },
-      error: authErr,
-    } = await supabase.auth.getUser(token)
-
-    if (authErr || !user) {
-      return res.status(401).json({ error: "Invalid auth token" })
-    }
-
-    const { data: orders, error } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-
-    if (error) {
-      return res.status(500).json({ error: "Failed to load orders" })
-    }
-
-    return res.json(orders)
   } catch (err) {
     return res.status(500).json({
       error: "Server error",
