@@ -199,6 +199,165 @@ app.post(
   }
 )
 
+/**
+ * Demo order route
+ * Example product:
+ * Instagram Demo = 100 credits
+ *
+ * Required body:
+ * {
+ *   userId: "...",
+ *   productName: "Instagram Demo",
+ *   creditCost: 100,
+ *   instagramUsername: "exampleuser",
+ *   quantity: 100
+ * }
+ */
+app.post("/api/orders/create", async (req, res) => {
+  try {
+    const {
+      userId,
+      productName,
+      creditCost,
+      instagramUsername,
+      quantity,
+    } = req.body
+
+    if (
+      !userId ||
+      !productName ||
+      typeof creditCost !== "number" ||
+      !instagramUsername ||
+      !quantity
+    ) {
+      return res.status(400).json({ error: "Missing required fields" })
+    }
+
+    const cleanInstagramUsername = String(instagramUsername).trim().replace(/^@/, "")
+    const cleanQuantity = Number(quantity)
+
+    if (!cleanInstagramUsername) {
+      return res.status(400).json({ error: "Instagram username is required" })
+    }
+
+    if (!Number.isFinite(cleanQuantity) || cleanQuantity <= 0) {
+      return res.status(400).json({ error: "Quantity must be a positive number" })
+    }
+
+    const { data: wallet, error: walletErr } = await supabase
+      .from("wallets")
+      .select("credit_balance")
+      .eq("user_id", userId)
+      .single()
+
+    if (walletErr || !wallet) {
+      return res.status(500).json({ error: "Wallet not found" })
+    }
+
+    if (wallet.credit_balance < creditCost) {
+      return res.status(400).json({
+        error: "Not enough credits",
+        currentBalance: wallet.credit_balance,
+        requiredCredits: creditCost,
+      })
+    }
+
+    const newBalance = wallet.credit_balance - creditCost
+
+    const { data: order, error: orderErr } = await supabase
+      .from("orders")
+      .insert({
+        user_id: userId,
+        product_name: productName,
+        amount: creditCost,
+        status: "pending",
+      })
+      .select()
+      .single()
+
+    if (orderErr || !order) {
+      return res.status(500).json({
+        error: "Failed to create order",
+        details: orderErr?.message || "Unknown order error",
+      })
+    }
+
+    const { error: updateWalletErr } = await supabase
+      .from("wallets")
+      .update({ credit_balance: newBalance })
+      .eq("user_id", userId)
+
+    if (updateWalletErr) {
+      return res.status(500).json({
+        error: "Failed to deduct credits",
+        details: updateWalletErr.message,
+      })
+    }
+
+    const { error: txErr } = await supabase
+      .from("credit_transactions")
+      .insert({
+        user_id: userId,
+        amount: -creditCost,
+        type: "purchase",
+      })
+
+    if (txErr) {
+      return res.status(500).json({
+        error: "Credits deducted, but failed to log transaction",
+        details: txErr.message,
+      })
+    }
+
+    const makePayload = {
+      orderId: order.id,
+      userId,
+      productName,
+      creditCost,
+      instagramUsername: cleanInstagramUsername,
+      quantity: cleanQuantity,
+    }
+
+    const makeRes = await fetch(process.env.MAKE_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(makePayload),
+    })
+
+    if (!makeRes.ok) {
+      return res.status(500).json({
+        error: "Order created, but Make webhook failed",
+        details: `Webhook responded with status ${makeRes.status}`,
+      })
+    }
+
+    const { error: updateOrderStatusErr } = await supabase
+      .from("orders")
+      .update({ status: "submitted" })
+      .eq("id", order.id)
+
+    if (updateOrderStatusErr) {
+      return res.status(500).json({
+        error: "Order sent to Make, but failed to update order status",
+        details: updateOrderStatusErr.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      orderId: order.id,
+      newBalance,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`)
