@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js"
 
 const app = express()
 
+
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
