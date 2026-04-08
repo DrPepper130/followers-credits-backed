@@ -241,7 +241,7 @@ app.post("/api/orders/create", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" })
     }
 
-    const cleanUsername = instagramUsername.trim().replace(/^@/, "")
+    const cleanUsername = String(instagramUsername).trim().replace(/^@/, "")
     const cleanQuantity = Number(quantity)
 
     if (!cleanUsername) {
