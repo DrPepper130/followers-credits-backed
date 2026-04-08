@@ -215,25 +215,33 @@ app.post(
  */
 app.post("/api/orders/create", async (req, res) => {
   try {
-    const {
-      userId,
-      productName,
-      creditCost,
-      instagramUsername,
-      quantity,
-    } = req.body
+    const authHeader = req.headers.authorization || ""
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null
 
-    if (
-      !userId ||
-      !productName ||
-      typeof creditCost !== "number" ||
-      !instagramUsername ||
-      !quantity
-    ) {
+    if (!token) {
+      return res.status(401).json({ error: "Missing auth token" })
+    }
+
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser(token)
+
+    if (authErr || !user) {
+      return res.status(401).json({ error: "Invalid auth token" })
+    }
+
+    const { productSlug, instagramUsername, quantity } = req.body
+
+    if (!productSlug || !instagramUsername || quantity === undefined) {
       return res.status(400).json({ error: "Missing required fields" })
     }
 
-    const cleanInstagramUsername = String(instagramUsername).trim().replace(/^@/, "")
+    const cleanInstagramUsername = String(instagramUsername)
+      .trim()
+      .replace(/^@/, "")
     const cleanQuantity = Number(quantity)
 
     if (!cleanInstagramUsername) {
@@ -244,10 +252,34 @@ app.post("/api/orders/create", async (req, res) => {
       return res.status(400).json({ error: "Quantity must be a positive number" })
     }
 
+    // Temporary product config
+    const PRODUCTS = {
+      "instagram-demo": {
+        name: "Instagram Demo",
+        creditsPerUnit: 1,
+        minQty: 1,
+        maxQty: 10000,
+      },
+    }
+
+    const product = PRODUCTS[productSlug]
+
+    if (!product) {
+      return res.status(400).json({ error: "Invalid product" })
+    }
+
+    if (cleanQuantity < product.minQty || cleanQuantity > product.maxQty) {
+      return res.status(400).json({
+        error: `Quantity must be between ${product.minQty} and ${product.maxQty}`,
+      })
+    }
+
+    const creditCost = cleanQuantity * product.creditsPerUnit
+
     const { data: wallet, error: walletErr } = await supabase
       .from("wallets")
       .select("credit_balance")
-      .eq("user_id", userId)
+      .eq("user_id", user.id)
       .single()
 
     if (walletErr || !wallet) {
@@ -267,8 +299,8 @@ app.post("/api/orders/create", async (req, res) => {
     const { data: order, error: orderErr } = await supabase
       .from("orders")
       .insert({
-        user_id: userId,
-        product_name: productName,
+        user_id: user.id,
+        product_name: product.name,
         amount: creditCost,
         status: "pending",
       })
@@ -285,7 +317,7 @@ app.post("/api/orders/create", async (req, res) => {
     const { error: updateWalletErr } = await supabase
       .from("wallets")
       .update({ credit_balance: newBalance })
-      .eq("user_id", userId)
+      .eq("user_id", user.id)
 
     if (updateWalletErr) {
       return res.status(500).json({
@@ -297,7 +329,7 @@ app.post("/api/orders/create", async (req, res) => {
     const { error: txErr } = await supabase
       .from("credit_transactions")
       .insert({
-        user_id: userId,
+        user_id: user.id,
         amount: -creditCost,
         type: "purchase",
       })
@@ -311,8 +343,9 @@ app.post("/api/orders/create", async (req, res) => {
 
     const makePayload = {
       orderId: order.id,
-      userId,
-      productName,
+      userId: user.id,
+      productSlug,
+      productName: product.name,
       creditCost,
       instagramUsername: cleanInstagramUsername,
       quantity: cleanQuantity,
@@ -348,6 +381,7 @@ app.post("/api/orders/create", async (req, res) => {
     return res.json({
       success: true,
       orderId: order.id,
+      creditCost,
       newBalance,
     })
   } catch (err) {
@@ -356,9 +390,4 @@ app.post("/api/orders/create", async (req, res) => {
       details: String(err),
     })
   }
-})
-
-const PORT = process.env.PORT || 3000
-app.listen(PORT, () => {
-  console.log(`Server listening on ${PORT}`)
 })
