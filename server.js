@@ -392,3 +392,43 @@ app.post("/api/orders/create", async (req, res) => {
     })
   }
 })
+
+
+app.get("/api/orders/my-orders", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || ""
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null
+
+    if (!token) {
+      return res.status(401).json({ error: "Missing auth token" })
+    }
+
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser(token)
+
+    if (authErr || !user) {
+      return res.status(401).json({ error: "Invalid auth token" })
+    }
+
+    const { data: orders, error } = await supabase
+      .from("orders")
+      .select("id, product_name, quantity, instagram_username, amount, status, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+
+    if (error) {
+      return res.status(500).json({ error: "Failed to load orders" })
+    }
+
+    return res.json(orders)
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
