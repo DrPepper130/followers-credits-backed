@@ -35,21 +35,56 @@ app.get("/", (req, res) => {
 
 app.post("/api/nowpayments/create-payment", async (req, res) => {
   try {
-    const { userId, packageId, payCurrency = "ltc" } = req.body
-    const pkg = PACKAGES[packageId]
+    const {
+      userId,
+      packageId,
+      customUsdAmount,
+      payCurrency = "ltc",
+    } = req.body
 
-    if (!userId || !pkg) {
-      return res.status(400).json({ error: "Missing or invalid input" })
+    if (!userId) {
+      return res.status(400).json({ error: "Missing userId" })
     }
 
-    const orderId = `credit_${userId}_${Date.now()}_${packageId}`
+    let usdAmount = null
+    let credits = null
+    let packageLabel = null
+    let packageKey = null
+
+    if (packageId) {
+      const pkg = PACKAGES[packageId]
+
+      if (!pkg) {
+        return res.status(400).json({ error: "Invalid packageId" })
+      }
+
+      usdAmount = pkg.usd
+      credits = pkg.credits
+      packageLabel = pkg.label
+      packageKey = packageId
+    } else if (typeof customUsdAmount === "number") {
+      if (!Number.isFinite(customUsdAmount) || customUsdAmount <= 0) {
+        return res.status(400).json({ error: "Invalid custom amount" })
+      }
+
+      usdAmount = customUsdAmount
+
+      // 100 credits per $1
+      credits = Math.floor(customUsdAmount * 100)
+      packageLabel = `$${customUsdAmount} custom top-up`
+      packageKey = "custom"
+    } else {
+      return res.status(400).json({ error: "Missing packageId or customUsdAmount" })
+    }
+
+    const orderId = `credit_${userId}_${Date.now()}_${packageKey}`
 
     const payload = {
-      price_amount: pkg.usd,
+      price_amount: usdAmount,
       price_currency: "usd",
       pay_currency: payCurrency,
       order_id: orderId,
-      order_description: `Credits top-up ${packageId}`,
+      order_description: `Credits top-up ${packageLabel}`,
       ipn_callback_url: `${process.env.BACKEND_BASE_URL}/api/nowpayments/ipn`,
       success_url: `${process.env.APP_BASE_URL}/dashboard`,
       cancel_url: `${process.env.APP_BASE_URL}/add-credits`,
@@ -67,7 +102,10 @@ app.post("/api/nowpayments/create-payment", async (req, res) => {
     const data = await r.json()
 
     if (!r.ok) {
-      return res.status(500).json({ error: "Failed to create payment", details: data })
+      return res.status(500).json({
+        error: "Failed to create payment",
+        details: data,
+      })
     }
 
     const { error } = await supabase.from("credit_topups").insert({
@@ -75,16 +113,19 @@ app.post("/api/nowpayments/create-payment", async (req, res) => {
       provider: "nowpayments",
       provider_payment_id: String(data.payment_id),
       provider_order_id: orderId,
-      package_id: packageId,
-      usd_amount: pkg.usd,
-      credits: pkg.credits,
+      package_id: packageKey,
+      usd_amount: usdAmount,
+      credits,
       pay_currency: data.pay_currency || payCurrency,
       price_amount: data.pay_amount || null,
       status: data.payment_status || "waiting",
     })
 
     if (error) {
-      return res.status(500).json({ error: "Failed to save topup", details: error.message })
+      return res.status(500).json({
+        error: "Failed to save topup",
+        details: error.message,
+      })
     }
 
     return res.json({
@@ -94,9 +135,14 @@ app.post("/api/nowpayments/create-payment", async (req, res) => {
       payCurrency: data.pay_currency,
       paymentId: data.payment_id,
       orderId,
+      credits,
+      usdAmount,
     })
   } catch (err) {
-    return res.status(500).json({ error: "Server error", details: String(err) })
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
   }
 })
 
