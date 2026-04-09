@@ -33,6 +33,63 @@ app.get("/", (req, res) => {
   res.status(200).send("OK")
 })
 
+
+
+app.post("/api/orders/create-guest-intent", async (req, res) => {
+  try {
+    const { productSlug, instagramUsername, quantity, email } = req.body
+
+    if (!productSlug || !instagramUsername || quantity === undefined || !email) {
+      return res.status(400).json({ error: "Missing required fields" })
+    }
+
+    const cleanUsername = String(instagramUsername).trim().replace(/^@/, "")
+    const cleanQuantity = Number(quantity)
+    const cleanEmail = String(email).trim().toLowerCase()
+
+    if (!cleanUsername) {
+      return res.status(400).json({ error: "Instagram username required" })
+    }
+
+    if (!Number.isFinite(cleanQuantity) || cleanQuantity <= 0) {
+      return res.status(400).json({ error: "Quantity must be positive" })
+    }
+
+    if (!cleanEmail.includes("@")) {
+      return res.status(400).json({ error: "Valid email required" })
+    }
+
+    const estimatedCredits = cleanQuantity
+
+    const { error } = await supabase.from("guest_order_intents").insert({
+      email: cleanEmail,
+      product_slug: productSlug,
+      instagram_username: cleanUsername,
+      quantity: cleanQuantity,
+      estimated_credits: estimatedCredits,
+    })
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to save guest checkout details",
+        details: error.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      estimatedCredits,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
 app.post("/api/nowpayments/create-payment", async (req, res) => {
   try {
     const {
