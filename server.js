@@ -85,7 +85,7 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
 
 app.post(
   "/api/nowpayments/guest-ipn",
-  express.raw({ type: "application/json" }),
+  express.raw({ type: "*/*" }),
   async (req, res) => {
     try {
       const rawBody = req.body.toString("utf8")
@@ -506,7 +506,7 @@ function verifyNowPaymentsIpn(rawBody, signature, ipnSecret) {
 
 app.post(
   "/api/nowpayments/ipn",
-  express.raw({ type: "application/json" }),
+  express.raw({ type: "*/*" }),
   async (req, res) => {
     try {
       const rawBody = req.body.toString("utf8")
