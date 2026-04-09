@@ -88,27 +88,42 @@ app.post(
   express.raw({ type: "*/*" }),
   async (req, res) => {
     try {
-      const rawBody = req.body.toString("utf8")
-      const signature = req.headers["x-nowpayments-sig"]
+      console.log("---- GUEST IPN HIT ----")
+      console.log("headers:", req.headers)
 
-      if (
-        !verifyNowPaymentsIpn(
-          rawBody,
-          String(signature || ""),
-          process.env.NOWPAYMENTS_IPN_SECRET
-        )
-      ) {
+      const rawBody = req.body.toString("utf8")
+      console.log("raw body:", rawBody)
+
+      const signature = req.headers["x-nowpayments-sig"]
+      console.log("signature:", signature)
+
+      const isValid = verifyNowPaymentsIpn(
+        rawBody,
+        String(signature || ""),
+        process.env.NOWPAYMENTS_IPN_SECRET
+      )
+
+      console.log("signature valid:", isValid)
+
+      if (!isValid) {
         return res.status(401).send("invalid signature")
       }
 
       const payload = JSON.parse(rawBody)
       const { payment_id, order_id, payment_status } = payload
 
+      console.log("payment_id:", payment_id)
+      console.log("order_id:", order_id)
+      console.log("payment_status:", payment_status)
+
       const { data: existing, error: findErr } = await supabase
         .from("guest_order_payments")
         .select("*")
         .eq("provider_order_id", order_id)
         .single()
+
+      console.log("existing row:", existing)
+      console.log("findErr:", findErr)
 
       if (findErr || !existing) {
         return res.status(404).send("guest payment not found")
@@ -123,17 +138,23 @@ app.post(
             : existing.paid_at,
       }
 
+      console.log("updatePayload:", updatePayload)
+
       const { error: updateErr } = await supabase
         .from("guest_order_payments")
         .update(updatePayload)
         .eq("id", existing.id)
 
+      console.log("updateErr:", updateErr)
+
       if (updateErr) {
         return res.status(500).send("update failed")
       }
 
+      console.log("guest ipn update success")
       return res.status(200).send("ok")
     } catch (err) {
+      console.log("guest ipn exception:", err)
       return res.status(500).send(String(err))
     }
   }
