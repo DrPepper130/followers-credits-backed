@@ -146,6 +146,63 @@ app.post("/api/nowpayments/create-payment", async (req, res) => {
   }
 })
 
+
+
+app.get("/api/nowpayments/payment-status", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || ""
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null
+
+    if (!token) {
+      return res.status(401).json({ error: "Missing auth token" })
+    }
+
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser(token)
+
+    if (authErr || !user) {
+      return res.status(401).json({ error: "Invalid auth token" })
+    }
+
+    const orderId = String(req.query.orderId || "").trim()
+
+    if (!orderId) {
+      return res.status(400).json({ error: "Missing orderId" })
+    }
+
+    const { data, error } = await supabase
+      .from("credit_topups")
+      .select("provider_order_id, status, credits, usd_amount, pay_currency, price_amount, paid_at")
+      .eq("user_id", user.id)
+      .eq("provider_order_id", orderId)
+      .single()
+
+    if (error || !data) {
+      return res.status(404).json({ error: "Payment not found" })
+    }
+
+    return res.json({
+      orderId: data.provider_order_id,
+      status: data.status,
+      credits: data.credits,
+      usdAmount: data.usd_amount,
+      payCurrency: data.pay_currency,
+      payAmount: data.price_amount,
+      paidAt: data.paid_at,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
 function verifyNowPaymentsIpn(rawBody, signature, ipnSecret) {
   const hmac = crypto
     .createHmac("sha512", ipnSecret)
