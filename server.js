@@ -39,7 +39,24 @@ app.get("/", (req, res) => {
   res.status(200).send("OK")
 })
 
+async function fetchNowPaymentsPaymentStatus(paymentId) {
+  const r = await fetch(`https://api.nowpayments.io/v1/payment/${paymentId}`, {
+    method: "GET",
+    headers: {
+      "x-api-key": process.env.NOWPAYMENTS_API_KEY,
+    },
+  })
 
+  const data = await r.json()
+
+  if (!r.ok) {
+    throw new Error(
+      `NOWPayments status lookup failed: ${JSON.stringify(data)}`
+    )
+  }
+
+  return data
+}
 
 app.get("/api/orders/guest-payment-status", async (req, res) => {
   try {
