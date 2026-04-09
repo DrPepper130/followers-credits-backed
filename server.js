@@ -35,6 +35,136 @@ app.get("/", (req, res) => {
 
 
 
+app.post("/api/orders/create-guest-payment", async (req, res) => {
+  try {
+    const {
+      productSlug,
+      instagramUsername,
+      quantity,
+      email,
+      payCurrency = "ltc",
+    } = req.body
+
+    if (!productSlug || !instagramUsername || quantity === undefined || !email) {
+      return res.status(400).json({ error: "Missing required fields" })
+    }
+
+    const cleanUsername = String(instagramUsername).trim().replace(/^@/, "")
+    const cleanQuantity = Number(quantity)
+    const cleanEmail = String(email).trim().toLowerCase()
+
+    if (!cleanUsername) {
+      return res.status(400).json({ error: "Instagram username required" })
+    }
+
+    if (!Number.isFinite(cleanQuantity) || cleanQuantity <= 0) {
+      return res.status(400).json({ error: "Quantity must be positive" })
+    }
+
+    if (!cleanEmail.includes("@")) {
+      return res.status(400).json({ error: "Valid email required" })
+    }
+
+    const PRODUCTS = {
+      "instagram-demo": {
+        name: "Instagram Demo",
+        unitPriceUsd: 0.02,
+        minQty: 1,
+        maxQty: 100000,
+      },
+    }
+
+    const product = PRODUCTS[productSlug]
+
+    if (!product) {
+      return res.status(400).json({ error: "Invalid product" })
+    }
+
+    if (cleanQuantity < product.minQty || cleanQuantity > product.maxQty) {
+      return res.status(400).json({
+        error: `Quantity must be between ${product.minQty} and ${product.maxQty}`,
+      })
+    }
+
+    const usdAmount = Number((cleanQuantity * product.unitPriceUsd).toFixed(2))
+    const providerOrderId = `guest_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+
+    const payload = {
+      price_amount: usdAmount,
+      price_currency: "usd",
+      pay_currency: payCurrency,
+      order_id: providerOrderId,
+      order_description: `${product.name} for @${cleanUsername} (${cleanQuantity})`,
+      ipn_callback_url: `${process.env.BACKEND_BASE_URL}/api/nowpayments/guest-ipn`,
+      success_url: `${process.env.APP_BASE_URL}/checkout-success`,
+      cancel_url: `${process.env.APP_BASE_URL}/checkout`,
+    }
+
+    const r = await fetch("https://api.nowpayments.io/v1/payment", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.NOWPAYMENTS_API_KEY,
+      },
+      body: JSON.stringify(payload),
+    })
+
+    const data = await r.json()
+
+    if (!r.ok) {
+      return res.status(500).json({
+        error: "Failed to create payment",
+        details: data,
+      })
+    }
+
+    const { error } = await supabase.from("guest_order_payments").insert({
+      email: cleanEmail,
+      product_slug: productSlug,
+      product_name: product.name,
+      instagram_username: cleanUsername,
+      quantity: cleanQuantity,
+      unit_price_usd: product.unitPriceUsd,
+      usd_amount: usdAmount,
+      provider: "nowpayments",
+      provider_payment_id: String(data.payment_id),
+      provider_order_id: providerOrderId,
+      pay_currency: data.pay_currency || payCurrency,
+      pay_amount: data.pay_amount || null,
+      pay_address: data.pay_address || null,
+      status: data.payment_status || "waiting",
+    })
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to save guest payment",
+        details: error.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      invoiceUrl: data.invoice_url || null,
+      payAddress: data.pay_address || null,
+      payAmount: data.pay_amount,
+      payCurrency: data.pay_currency,
+      paymentId: data.payment_id,
+      orderId: providerOrderId,
+      productName: product.name,
+      quantity: cleanQuantity,
+      usdAmount,
+      unitPriceUsd: product.unitPriceUsd,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
 app.post("/api/orders/create-guest-intent", async (req, res) => {
   try {
     const { productSlug, instagramUsername, quantity, email } = req.body
