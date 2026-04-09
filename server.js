@@ -13,7 +13,13 @@ app.use(cors({
 }))
 
 app.use((req, res, next) => {
-  if (req.path === "/api/nowpayments/ipn") return next()
+  if (
+    req.path === "/api/nowpayments/ipn" ||
+    req.path === "/api/nowpayments/guest-ipn"
+  ) {
+    return next()
+  }
+
   express.json()(req, res, next)
 })
 
