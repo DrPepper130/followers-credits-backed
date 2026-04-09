@@ -58,6 +58,8 @@ async function fetchNowPaymentsPaymentStatus(paymentId) {
   return data
 }
 
+
+
 app.get("/api/orders/guest-payment-status", async (req, res) => {
   try {
     const orderId = String(req.query.orderId || "").trim()
@@ -69,31 +71,81 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
       return res.status(400).json({ error: "Missing orderId or email" })
     }
 
-    const { data, error } = await supabase
+    const { data: localRow, error: localErr } = await supabase
       .from("guest_order_payments")
-      .select("provider_order_id, status, quantity, usd_amount, pay_currency, pay_amount, pay_address, product_name, instagram_username, paid_at")
+      .select("*")
       .eq("provider_order_id", orderId)
       .eq("email", email)
       .single()
 
-    console.log("guest-payment-status data:", data)
-    console.log("guest-payment-status error:", error)
+    console.log("guest-payment-status localRow:", localRow)
+    console.log("guest-payment-status localErr:", localErr)
 
-    if (error || !data) {
+    if (localErr || !localRow) {
       return res.status(404).json({ error: "Payment not found" })
     }
 
+    let finalRow = localRow
+
+    const localStatus = String(localRow.status || "").toLowerCase()
+
+    if (
+      localRow.provider_payment_id &&
+      localStatus !== "finished" &&
+      localStatus !== "failed" &&
+      localStatus !== "expired"
+    ) {
+      try {
+        const remote = await fetchNowPaymentsPaymentStatus(
+          localRow.provider_payment_id
+        )
+
+        console.log("guest-payment-status remote:", remote)
+
+        const remoteStatus = String(remote.payment_status || "").toLowerCase()
+
+        if (remoteStatus && remoteStatus !== localStatus) {
+          const updatePayload = {
+            status: remote.payment_status,
+            paid_at:
+              remoteStatus === "finished"
+                ? new Date().toISOString()
+                : localRow.paid_at,
+            pay_amount: remote.pay_amount ?? localRow.pay_amount,
+            pay_currency: remote.pay_currency ?? localRow.pay_currency,
+            pay_address: remote.pay_address ?? localRow.pay_address,
+          }
+
+          const { data: updatedRow, error: updateErr } = await supabase
+            .from("guest_order_payments")
+            .update(updatePayload)
+            .eq("id", localRow.id)
+            .select("*")
+            .single()
+
+          console.log("guest-payment-status updateErr:", updateErr)
+          console.log("guest-payment-status updatedRow:", updatedRow)
+
+          if (!updateErr && updatedRow) {
+            finalRow = updatedRow
+          }
+        }
+      } catch (syncErr) {
+        console.log("guest-payment-status syncErr:", syncErr)
+      }
+    }
+
     return res.json({
-      orderId: data.provider_order_id,
-      status: data.status,
-      quantity: data.quantity,
-      usdAmount: data.usd_amount,
-      payCurrency: data.pay_currency,
-      payAmount: data.pay_amount,
-      payAddress: data.pay_address,
-      productName: data.product_name,
-      instagramUsername: data.instagram_username,
-      paidAt: data.paid_at,
+      orderId: finalRow.provider_order_id,
+      status: finalRow.status,
+      quantity: finalRow.quantity,
+      usdAmount: finalRow.usd_amount,
+      payCurrency: finalRow.pay_currency,
+      payAmount: finalRow.pay_amount,
+      payAddress: finalRow.pay_address,
+      productName: finalRow.product_name,
+      instagramUsername: finalRow.instagram_username,
+      paidAt: finalRow.paid_at,
     })
   } catch (err) {
     console.log("guest-payment-status exception:", err)
