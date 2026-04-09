@@ -224,7 +224,7 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
             status: remote.payment_status,
             paid_at:
               remoteStatus === "finished"
-                ? new Date().toISOString()
+                ? (localRow.paid_at || new Date().toISOString())
                 : localRow.paid_at,
             pay_amount: remote.pay_amount ?? localRow.pay_amount,
             pay_currency: remote.pay_currency ?? localRow.pay_currency,
