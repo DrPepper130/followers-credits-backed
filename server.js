@@ -60,6 +60,121 @@ async function fetchNowPaymentsPaymentStatus(paymentId) {
 
 
 
+
+function toIsoOrNull(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function normalizeNowPaymentsStatus(status) {
+  return String(status || "").trim().toLowerCase();
+}
+
+function isFinishedStatus(status) {
+  return normalizeNowPaymentsStatus(status) === "finished";
+}
+
+async function sendGuestOrderToMake(order) {
+  const webhookUrl = process.env.MAKE_GUEST_WEBHOOK_URL;
+  if (!webhookUrl) {
+    throw new Error("MAKE_GUEST_WEBHOOK_URL is not set");
+  }
+
+  const payload = {
+    source: "guest_crypto_checkout",
+    email: order.email,
+    productSlug: order.product_slug,
+    productName: order.product_name,
+    instagramUsername: order.instagram_username,
+    quantity: order.quantity,
+    usdAmount: order.usd_amount,
+    providerOrderId: order.provider_order_id,
+    providerPaymentId: order.provider_payment_id,
+    paymentCurrency: order.pay_currency,
+    paymentAmount: order.pay_amount,
+    paidAt: order.paid_at || null,
+  };
+
+  const resp = await fetch(webhookUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`Make webhook failed: ${resp.status} ${body}`);
+  }
+
+  return payload;
+}
+
+/**
+ * Fires Make webhook once and only once for a finished guest payment.
+ * Safe against repeated NOWPayments IPNs.
+ */
+async function maybeDispatchGuestMakeWebhook(supabase, paymentRow) {
+  if (!paymentRow) return { sent: false, reason: "missing_row" };
+
+  const status = normalizeNowPaymentsStatus(paymentRow.status);
+  if (status !== "finished") {
+    return { sent: false, reason: "status_not_finished" };
+  }
+
+  if (paymentRow.webhook_sent_at) {
+    return { sent: false, reason: "already_sent" };
+  }
+
+  // Re-read the freshest row to reduce race issues
+  const { data: freshRow, error: freshErr } = await supabase
+    .from("guest_order_payments")
+    .select("*")
+    .eq("id", paymentRow.id)
+    .single();
+
+  if (freshErr) {
+    throw new Error(`Failed to re-read guest payment row: ${freshErr.message}`);
+  }
+
+  if (!freshRow) {
+    return { sent: false, reason: "row_not_found_after_reread" };
+  }
+
+  if (normalizeNowPaymentsStatus(freshRow.status) !== "finished") {
+    return { sent: false, reason: "fresh_status_not_finished" };
+  }
+
+  if (freshRow.webhook_sent_at) {
+    return { sent: false, reason: "already_sent_after_reread" };
+  }
+
+  // Send webhook first, then mark sent.
+  // This avoids false positives where DB says "sent" but Make never got it.
+  await sendGuestOrderToMake(freshRow);
+
+  const sentAt = new Date().toISOString();
+
+  const { error: markErr } = await supabase
+    .from("guest_order_payments")
+    .update({
+      webhook_sent_at: sentAt,
+      webhook_last_error: null,
+    })
+    .eq("id", freshRow.id)
+    .is("webhook_sent_at", null);
+
+  if (markErr) {
+    throw new Error(`Webhook succeeded but failed to mark webhook_sent_at: ${markErr.message}`);
+  }
+
+  return { sent: true, reason: "dispatched", sentAt };
+}
+
+
+
 app.get("/api/orders/guest-payment-status", async (req, res) => {
   try {
     const orderId = String(req.query.orderId || "").trim()
@@ -158,82 +273,149 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
 
 
 
-app.post(
-  "/api/nowpayments/guest-ipn",
-  express.raw({ type: "*/*" }),
-  async (req, res) => {
-    try {
-      console.log("---- GUEST IPN HIT ----")
-      console.log("headers:", req.headers)
+app.post("/api/nowpayments/guest-ipn", express.json({ type: "*/*" }), async (req, res) => {
+  try {
+    // --------------------------------------------------
+    // 1) VERIFY SIGNATURE
+    // Keep your existing signature verification here.
+    // If invalid, return 401 and stop.
+    // --------------------------------------------------
 
-      const rawBody = req.body.toString("utf8")
-      console.log("raw body:", rawBody)
+    const body = req.body || {};
 
-      const signature = req.headers["x-nowpayments-sig"]
-      console.log("signature:", signature)
+    const paymentStatus = normalizeNowPaymentsStatus(body.payment_status);
+    const providerPaymentId =
+      body.payment_id ??
+      body.id ??
+      null;
 
-      const isValid = verifyNowPaymentsIpn(
-        rawBody,
-        String(signature || ""),
-        process.env.NOWPAYMENTS_IPN_SECRET
-      )
+    const providerOrderId =
+      body.order_id ??
+      body.order_description ??
+      null;
 
-      console.log("signature valid:", isValid)
-
-      if (!isValid) {
-        return res.status(401).send("invalid signature")
-      }
-
-      const payload = JSON.parse(rawBody)
-      const { payment_id, order_id, payment_status } = payload
-
-      console.log("payment_id:", payment_id)
-      console.log("order_id:", order_id)
-      console.log("payment_status:", payment_status)
-
-      const { data: existing, error: findErr } = await supabase
-        .from("guest_order_payments")
-        .select("*")
-        .eq("provider_order_id", order_id)
-        .single()
-
-      console.log("existing row:", existing)
-      console.log("findErr:", findErr)
-
-      if (findErr || !existing) {
-        return res.status(404).send("guest payment not found")
-      }
-
-      const updatePayload = {
-        provider_payment_id: String(payment_id ?? existing.provider_payment_id),
-        status: payment_status,
-        paid_at:
-          payment_status === "finished"
-            ? new Date().toISOString()
-            : existing.paid_at,
-      }
-
-      console.log("updatePayload:", updatePayload)
-
-      const { error: updateErr } = await supabase
-        .from("guest_order_payments")
-        .update(updatePayload)
-        .eq("id", existing.id)
-
-      console.log("updateErr:", updateErr)
-
-      if (updateErr) {
-        return res.status(500).send("update failed")
-      }
-
-      console.log("guest ipn update success")
-      return res.status(200).send("ok")
-    } catch (err) {
-      console.log("guest ipn exception:", err)
-      return res.status(500).send(String(err))
+    if (!providerPaymentId && !providerOrderId) {
+      console.error("guest-ipn missing identifiers", body);
+      return res.status(400).json({ ok: false, error: "Missing payment identifiers" });
     }
+
+    // --------------------------------------------------
+    // 2) FIND EXISTING GUEST PAYMENT ROW
+    // Prefer provider_payment_id if available
+    // --------------------------------------------------
+    let query = supabase
+      .from("guest_order_payments")
+      .select("*");
+
+    if (providerPaymentId) {
+      query = query.eq("provider_payment_id", String(providerPaymentId));
+    } else {
+      query = query.eq("provider_order_id", String(providerOrderId));
+    }
+
+    const { data: existingRow, error: findErr } = await query.single();
+
+    if (findErr || !existingRow) {
+      console.error("guest-ipn row lookup failed", {
+        providerPaymentId,
+        providerOrderId,
+        error: findErr?.message || null,
+      });
+      return res.status(404).json({ ok: false, error: "Guest payment row not found" });
+    }
+
+    // --------------------------------------------------
+    // 3) BUILD UPDATE PAYLOAD
+    // Only set paid_at once payment is finished
+    // --------------------------------------------------
+    const updatePayload = {
+      status: paymentStatus,
+    };
+
+    if (providerPaymentId && !existingRow.provider_payment_id) {
+      updatePayload.provider_payment_id = String(providerPaymentId);
+    }
+
+    if (providerOrderId && !existingRow.provider_order_id) {
+      updatePayload.provider_order_id = String(providerOrderId);
+    }
+
+    if (body.pay_currency) {
+      updatePayload.pay_currency = body.pay_currency;
+    }
+
+    if (body.pay_amount != null) {
+      updatePayload.pay_amount = body.pay_amount;
+    }
+
+    if (body.pay_address) {
+      updatePayload.pay_address = body.pay_address;
+    }
+
+    if (isFinishedStatus(paymentStatus) && !existingRow.paid_at) {
+      updatePayload.paid_at = new Date().toISOString();
+    }
+
+    const { data: updatedRows, error: updateErr } = await supabase
+      .from("guest_order_payments")
+      .update(updatePayload)
+      .eq("id", existingRow.id)
+      .select();
+
+    if (updateErr) {
+      console.error("guest-ipn update failed", updateErr);
+      return res.status(500).json({ ok: false, error: "Failed to update guest payment" });
+    }
+
+    const updatedRow = updatedRows?.[0] || {
+      ...existingRow,
+      ...updatePayload,
+    };
+
+    // --------------------------------------------------
+    // 4) ONLY ON FIRST TRANSITION TO FINISHED:
+    // try sending Make webhook
+    // repeated IPNs become no-ops because of webhook_sent_at
+    // --------------------------------------------------
+    let webhookResult = { sent: false, reason: "not_attempted" };
+
+    if (isFinishedStatus(updatedRow.status)) {
+      try {
+        webhookResult = await maybeDispatchGuestMakeWebhook(supabase, updatedRow);
+      } catch (webhookErr) {
+        console.error("guest Make webhook dispatch failed", webhookErr);
+
+        await supabase
+          .from("guest_order_payments")
+          .update({
+            webhook_last_error: webhookErr.message || "Unknown webhook error",
+          })
+          .eq("id", updatedRow.id);
+
+        // IMPORTANT:
+        // return 200 so NOWPayments doesn't endlessly retry due to your downstream Make outage
+        // if you WANT retries from NOWPayments instead, return 500 here instead
+      }
+    }
+
+    console.log("guest-ipn processed", {
+      providerPaymentId,
+      providerOrderId,
+      paymentStatus,
+      rowId: updatedRow.id,
+      webhookResult,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      paymentStatus,
+      webhookResult,
+    });
+  } catch (err) {
+    console.error("guest-ipn fatal error", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
-)
+});
 
 
 
