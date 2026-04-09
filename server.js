@@ -46,6 +46,8 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
     const orderId = String(req.query.orderId || "").trim()
     const email = String(req.query.email || "").trim().toLowerCase()
 
+    console.log("guest-payment-status hit", { orderId, email })
+
     if (!orderId || !email) {
       return res.status(400).json({ error: "Missing orderId or email" })
     }
@@ -56,6 +58,9 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
       .eq("provider_order_id", orderId)
       .eq("email", email)
       .single()
+
+    console.log("guest-payment-status data:", data)
+    console.log("guest-payment-status error:", error)
 
     if (error || !data) {
       return res.status(404).json({ error: "Payment not found" })
@@ -74,6 +79,7 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
       paidAt: data.paid_at,
     })
   } catch (err) {
+    console.log("guest-payment-status exception:", err)
     return res.status(500).json({
       error: "Server error",
       details: String(err),
