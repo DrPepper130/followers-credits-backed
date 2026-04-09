@@ -250,6 +250,15 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
       }
     }
 
+    if (normalizeNowPaymentsStatus(finalRow.status) === "finished") {
+      try {
+        const webhookResult = await maybeDispatchGuestMakeWebhook(supabase, finalRow)
+        console.log("guest-payment-status webhookResult:", webhookResult)
+      } catch (err) {
+        console.error("polling fallback webhook dispatch failed", err)
+      }
+    }
+
     return res.json({
       orderId: finalRow.provider_order_id,
       status: finalRow.status,
@@ -270,7 +279,6 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
     })
   }
 })
-
 
 
 app.post("/api/nowpayments/guest-ipn", express.json({ type: "*/*" }), async (req, res) => {
