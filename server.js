@@ -35,6 +35,106 @@ app.get("/", (req, res) => {
 
 
 
+app.get("/api/orders/guest-payment-status", async (req, res) => {
+  try {
+    const orderId = String(req.query.orderId || "").trim()
+    const email = String(req.query.email || "").trim().toLowerCase()
+
+    if (!orderId || !email) {
+      return res.status(400).json({ error: "Missing orderId or email" })
+    }
+
+    const { data, error } = await supabase
+      .from("guest_order_payments")
+      .select("provider_order_id, status, quantity, usd_amount, pay_currency, pay_amount, pay_address, product_name, instagram_username, paid_at")
+      .eq("provider_order_id", orderId)
+      .eq("email", email)
+      .single()
+
+    if (error || !data) {
+      return res.status(404).json({ error: "Payment not found" })
+    }
+
+    return res.json({
+      orderId: data.provider_order_id,
+      status: data.status,
+      quantity: data.quantity,
+      usdAmount: data.usd_amount,
+      payCurrency: data.pay_currency,
+      payAmount: data.pay_amount,
+      payAddress: data.pay_address,
+      productName: data.product_name,
+      instagramUsername: data.instagram_username,
+      paidAt: data.paid_at,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
+app.post(
+  "/api/nowpayments/guest-ipn",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const rawBody = req.body.toString("utf8")
+      const signature = req.headers["x-nowpayments-sig"]
+
+      if (
+        !verifyNowPaymentsIpn(
+          rawBody,
+          String(signature || ""),
+          process.env.NOWPAYMENTS_IPN_SECRET
+        )
+      ) {
+        return res.status(401).send("invalid signature")
+      }
+
+      const payload = JSON.parse(rawBody)
+      const { payment_id, order_id, payment_status } = payload
+
+      const { data: existing, error: findErr } = await supabase
+        .from("guest_order_payments")
+        .select("*")
+        .eq("provider_order_id", order_id)
+        .single()
+
+      if (findErr || !existing) {
+        return res.status(404).send("guest payment not found")
+      }
+
+      const updatePayload = {
+        provider_payment_id: String(payment_id ?? existing.provider_payment_id),
+        status: payment_status,
+        paid_at:
+          payment_status === "finished"
+            ? new Date().toISOString()
+            : existing.paid_at,
+      }
+
+      const { error: updateErr } = await supabase
+        .from("guest_order_payments")
+        .update(updatePayload)
+        .eq("id", existing.id)
+
+      if (updateErr) {
+        return res.status(500).send("update failed")
+      }
+
+      return res.status(200).send("ok")
+    } catch (err) {
+      return res.status(500).send(String(err))
+    }
+  }
+)
+
+
+
 app.post("/api/orders/create-guest-payment", async (req, res) => {
   try {
     const {
