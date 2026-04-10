@@ -141,17 +141,22 @@ async function sendDiscordOrderNotification({
     .filter(Boolean)
     .join("\n")
 
-  const resp = await fetch(webhookUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ content }),
-  })
+  try {
+    const resp = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content }),
+    })
 
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "")
-    throw new Error(`Discord webhook failed: ${resp.status} ${text}`)
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "")
+      console.error(`Discord webhook failed: ${resp.status} ${text}`)
+      return
+    }
+  } catch (err) {
+    console.error("Discord webhook request error:", err)
   }
 }
 
