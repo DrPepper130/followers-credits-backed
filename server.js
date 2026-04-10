@@ -96,8 +96,9 @@ async function sendGuestOrderToMake(order) {
   })
 
   if (!resp.ok) {
-    const body = await resp.text().catch(() => "")
-    throw new Error(`Make webhook failed: ${resp.status} ${body}`)
+    const text = await resp.text().catch(() => "")
+    console.error(`Discord webhook failed: ${resp.status} ${text}`)
+    return
   }
 
   return payload
@@ -194,16 +195,20 @@ async function maybeDispatchGuestMakeWebhook(supabase, paymentRow) {
 
   await sendGuestOrderToMake(freshRow)
 
-  await sendDiscordOrderNotification({
-    source: "guest_crypto_checkout",
-    orderId: freshRow.provider_order_id,
-    orderedAt: freshRow.created_at,
-    instagramUsername: freshRow.instagram_username,
-    productName: freshRow.product_name,
-    productSlug: freshRow.product_slug,
-    quantity: freshRow.quantity,
-    email: freshRow.email,
-  })
+  try {
+    await sendDiscordOrderNotification({
+      source: "guest_crypto_checkout",
+      orderId: freshRow.provider_order_id,
+      orderedAt: freshRow.created_at,
+      instagramUsername: freshRow.instagram_username,
+      productName: freshRow.product_name,
+      productSlug: freshRow.product_slug,
+      quantity: freshRow.quantity,
+      email: freshRow.email,
+    })
+  } catch (discordErr) {
+    console.error("guest checkout Discord notification failed:", discordErr)
+  }
 
   const sentAt = new Date().toISOString()
 
@@ -1070,16 +1075,20 @@ app.post("/api/orders/create", async (req, res) => {
       })
     }
 
-    await sendDiscordOrderNotification({
-      source: "wallet_checkout",
-      orderId: order.id,
-      orderedAt: order.created_at || new Date().toISOString(),
-      instagramUsername: cleanUsername,
-      productName: product.name,
-      productSlug,
-      quantity: cleanQuantity,
-      userId: user.id,
-    })
+    try {
+      await sendDiscordOrderNotification({
+        source: "wallet_checkout",
+        orderId: order.id,
+        orderedAt: order.created_at || new Date().toISOString(),
+        instagramUsername: cleanUsername,
+        productName: product.name,
+        productSlug,
+        quantity: cleanQuantity,
+        userId: user.id,
+      })
+  } catch (discordErr) {
+    console.error("wallet checkout Discord notification failed:", discordErr)
+  }
 
     const { error: updateOrderStatusErr } = await supabase
       .from("orders")
