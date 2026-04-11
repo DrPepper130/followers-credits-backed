@@ -474,6 +474,8 @@ app.post(
   }
 )
 
+
+
 app.post("/api/orders/create-guest-payment", async (req, res) => {
   try {
     const {
@@ -481,7 +483,6 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
       instagramUsername,
       quantity,
       email,
-      payCurrency = "ltc",
     } = req.body
 
     if (!productSlug || !instagramUsername || quantity === undefined || !email) {
@@ -528,16 +529,26 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
     const usdAmount = Number((cleanQuantity * product.unitPriceUsd).toFixed(2))
     const providerOrderId = `guest_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
 
+    const returnUrl =
+      `${process.env.APP_BASE_URL}/orders/instagram-followers` +
+      `?orderId=${encodeURIComponent(providerOrderId)}` +
+      `&email=${encodeURIComponent(cleanEmail)}` +
+      `&checkout=crypto`
+
     const payload = {
       price_amount: usdAmount,
       price_currency: "usd",
-      pay_currency: payCurrency,
       order_id: providerOrderId,
       order_description: `${product.name} for @${cleanUsername} (${cleanQuantity})`,
       ipn_callback_url: `${process.env.BACKEND_BASE_URL}/api/nowpayments/guest-ipn`,
-      success_url: `${process.env.APP_BASE_URL}/checkout-success`,
-      cancel_url: `${process.env.APP_BASE_URL}/checkout`,
+      success_url: returnUrl,
+      cancel_url: returnUrl,
     }
+
+    // Important:
+    // We intentionally do NOT send pay_currency here.
+    // That lets the hosted NOWPayments page handle crypto selection,
+    // based on the coins enabled in your NOWPayments account.
 
     const r = await fetch("https://api.nowpayments.io/v1/payment", {
       method: "POST",
@@ -557,7 +568,14 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
       })
     }
 
-    const { error } = await supabase.from("guest_order_payments").insert({
+    if (!data.invoice_url) {
+      return res.status(500).json({
+        error: "NOWPayments did not return a hosted invoice URL",
+        details: data,
+      })
+    }
+
+    const insertPayload = {
       email: cleanEmail,
       product_slug: productSlug,
       product_name: product.name,
@@ -566,13 +584,19 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
       unit_price_usd: product.unitPriceUsd,
       usd_amount: usdAmount,
       provider: "nowpayments",
-      provider_payment_id: String(data.payment_id),
+      provider_payment_id: data.payment_id ? String(data.payment_id) : null,
       provider_order_id: providerOrderId,
-      pay_currency: data.pay_currency || payCurrency,
+      pay_currency: data.pay_currency || null,
       pay_amount: data.pay_amount || null,
       pay_address: data.pay_address || null,
       status: data.payment_status || "waiting",
-    })
+      invoice_url: data.invoice_url,
+      checkout_return_url: returnUrl,
+    }
+
+    const { error } = await supabase
+      .from("guest_order_payments")
+      .insert(insertPayload)
 
     if (error) {
       return res.status(500).json({
@@ -583,16 +607,14 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
 
     return res.json({
       success: true,
-      invoiceUrl: data.invoice_url || null,
-      payAddress: data.pay_address || null,
-      payAmount: data.pay_amount,
-      payCurrency: data.pay_currency,
-      paymentId: data.payment_id,
       orderId: providerOrderId,
+      invoiceUrl: data.invoice_url,
+      status: data.payment_status || "waiting",
       productName: product.name,
       quantity: cleanQuantity,
       usdAmount,
       unitPriceUsd: product.unitPriceUsd,
+      returnUrl,
     })
   } catch (err) {
     return res.status(500).json({
@@ -601,6 +623,8 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
     })
   }
 })
+
+
 
 app.post("/api/orders/create-guest-intent", async (req, res) => {
   try {
