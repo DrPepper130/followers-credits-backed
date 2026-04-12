@@ -28,11 +28,374 @@ const supabase = createClient(
 )
 
 // Credit / wallet top-up packages
-const PACKAGES = {
-  test_1: { usd: 1, credits: 100, label: "$1 → 100 credits" },
-  starter_10: { usd: 10, credits: 1000, label: "$10 → 1000 credits" },
-  growth_25: { usd: 25, credits: 2750, label: "$25 → 2750 credits" },
-  pro_50: { usd: 50, credits: 6000, label: "$50 → 6000 credits" },
+const PRODUCTS = {
+  // =========================
+  // Instagram
+  // =========================
+
+  "instagram-followers": {
+    name: "Instagram Followers",
+    unitPriceUsd: 0.02,
+    minQty: 100,
+    maxQty: 100000,
+    unitLabel: "followers",
+    platformLabel: "Instagram",
+    returnPath: "/order/instagram-followers",
+    inputType: "instagram_username",
+    inputLabel: "Instagram username",
+    inputPlaceholder: "your_username",
+    pricingModel: "per_unit",
+  },
+
+  "instagram-likes": {
+    name: "Instagram Likes",
+    unitPriceUsd: 0.01,
+    minQty: 200,
+    maxQty: 100000,
+    unitLabel: "likes",
+    platformLabel: "Instagram",
+    returnPath: "/order/instagram-likes",
+    inputType: "instagram_post_url",
+    inputLabel: "Instagram post URL",
+    inputPlaceholder: "https://instagram.com/p/your_post",
+    pricingModel: "per_unit",
+  },
+
+  "instagram-reposts": {
+    name: "Instagram Reposts",
+    unitPriceUsd: 0.02,
+    minQty: 50,
+    maxQty: 10000,
+    unitLabel: "reposts",
+    platformLabel: "Instagram",
+    returnPath: "/order/instagram-reposts",
+    inputType: "instagram_post_url",
+    inputLabel: "Instagram post URL",
+    inputPlaceholder: "https://instagram.com/p/your_post",
+    pricingModel: "per_unit",
+  },
+
+  "instagram-shares": {
+    name: "Instagram Shares",
+    unitPriceUsd: 0.02,
+    minQty: 50,
+    maxQty: 1000000,
+    unitLabel: "shares",
+    platformLabel: "Instagram",
+    returnPath: "/order/instagram-shares",
+    inputType: "instagram_post_url",
+    inputLabel: "Instagram post URL",
+    inputPlaceholder: "https://instagram.com/p/your_post",
+    pricingModel: "per_unit",
+  },
+
+  // =========================
+  // Guns.lol
+  // =========================
+
+  "gunslol-views": {
+    name: "Guns.lol Views",
+    unitPriceUsd: 0.0125,
+    minQty: 100,
+    maxQty: 100000,
+    unitLabel: "views",
+    platformLabel: "Guns.lol",
+    returnPath: "/order/gunslol-views",
+    inputType: "profile_url",
+    inputLabel: "Guns.lol profile URL",
+    inputPlaceholder: "https://guns.lol/yourname",
+    pricingModel: "per_unit",
+  },
+
+  // =========================
+  // Discord Members
+  // =========================
+
+  "discord-offline-members": {
+    name: "Discord Offline Members",
+    unitPriceUsd: 0.01,
+    minQty: 100,
+    maxQty: 10000,
+    unitLabel: "members",
+    platformLabel: "Discord",
+    returnPath: "/order/discord-offline-members",
+    inputType: "discord_invite",
+    inputLabel: "Discord invite link",
+    inputPlaceholder: "https://discord.gg/yourserver",
+    pricingModel: "per_unit",
+  },
+
+  "discord-online-members": {
+    name: "Discord Online Members",
+    unitPriceUsd: 0.02,
+    minQty: 100,
+    maxQty: 10000,
+    unitLabel: "members",
+    platformLabel: "Discord",
+    returnPath: "/order/discord-online-members",
+    inputType: "discord_invite",
+    inputLabel: "Discord invite link",
+    inputPlaceholder: "https://discord.gg/yourserver",
+    pricingModel: "per_unit",
+  },
+
+  "discord-premium-members": {
+    name: "Premium Discord Members",
+    unitPriceUsd: 0.03,
+    minQty: 100,
+    maxQty: 10000,
+    unitLabel: "members",
+    platformLabel: "Discord",
+    returnPath: "/order/discord-premium-members",
+    inputType: "discord_invite",
+    inputLabel: "Discord invite link",
+    inputPlaceholder: "https://discord.gg/yourserver",
+    pricingModel: "per_unit",
+  },
+
+  "real-discord-members": {
+    name: "Real Discord Members",
+    unitPriceUsd: 0.04,
+    minQty: 100,
+    maxQty: 100000,
+    unitLabel: "members",
+    platformLabel: "Discord",
+    returnPath: "/order/real-discord-members",
+    inputType: "discord_invite",
+    inputLabel: "Discord invite link",
+    inputPlaceholder: "https://discord.gg/yourserver",
+    pricingModel: "per_unit",
+  },
+
+  "discord-reactions": {
+    name: "Discord Reactions",
+    unitPriceUsd: 0.02,
+    minQty: 100,
+    maxQty: 10000,
+    unitLabel: "reactions",
+    platformLabel: "Discord",
+    returnPath: "/order/discord-reactions",
+    inputType: "discord_message_link",
+    inputLabel: "Discord message link",
+    inputPlaceholder: "https://discord.com/channels/...",
+    pricingModel: "per_unit",
+  },
+
+  // =========================
+  // YouTube
+  // =========================
+
+  "youtube-subscribers": {
+    name: "YouTube Subscribers",
+    unitPriceUsd: 0.01,
+    minQty: 200,
+    maxQty: 100000,
+    unitLabel: "subscribers",
+    platformLabel: "YouTube",
+    returnPath: "/order/youtube-subscribers",
+    inputType: "youtube_channel",
+    inputLabel: "YouTube channel URL",
+    inputPlaceholder: "https://youtube.com/@yourchannel",
+    pricingModel: "per_unit",
+  },
+
+  "youtube-views": {
+    name: "YouTube Views",
+    unitPriceUsd: 0.004,
+    minQty: 500,
+    maxQty: 100000,
+    unitLabel: "views",
+    platformLabel: "YouTube",
+    returnPath: "/order/youtube-views",
+    inputType: "youtube_video",
+    inputLabel: "YouTube video URL",
+    inputPlaceholder: "https://youtube.com/watch?v=yourvideo",
+    pricingModel: "per_unit",
+  },
+
+  "youtube-likes": {
+    name: "YouTube Likes",
+    unitPriceUsd: 0.005,
+    minQty: 200,
+    maxQty: 100000,
+    unitLabel: "likes",
+    platformLabel: "YouTube",
+    returnPath: "/order/youtube-likes",
+    inputType: "youtube_video",
+    inputLabel: "YouTube video URL",
+    inputPlaceholder: "https://youtube.com/watch?v=yourvideo",
+    pricingModel: "per_unit",
+  },
+
+  "youtube-comment-likes": {
+    name: "YouTube Comment Likes",
+    unitPriceUsd: 0.005,
+    minQty: 100,
+    maxQty: 100000,
+    unitLabel: "likes",
+    platformLabel: "YouTube",
+    returnPath: "/order/youtube-comment-likes",
+    inputType: "youtube_comment",
+    inputLabel: "YouTube comment link",
+    inputPlaceholder: "https://youtube.com/comment/...",
+    pricingModel: "per_unit",
+  },
+
+  // =========================
+  // Twitch
+  // =========================
+
+  "twitch-followers": {
+    name: "Twitch Followers",
+    unitPriceUsd: 0.01,
+    minQty: 100,
+    maxQty: 50000,
+    unitLabel: "followers",
+    platformLabel: "Twitch",
+    returnPath: "/order/twitch-followers",
+    inputType: "twitch_username",
+    inputLabel: "Twitch username",
+    inputPlaceholder: "your_channel_name",
+    pricingModel: "per_unit",
+  },
+
+  "twitch-livestream-views": {
+    name: "Twitch Livestream Views",
+    unitPriceUsd: 0.01,
+    minQty: 100,
+    maxQty: 10000,
+    unitLabel: "views",
+    platformLabel: "Twitch",
+    returnPath: "/order/twitch-livestream-views",
+    inputType: "twitch_stream",
+    inputLabel: "Twitch livestream URL",
+    inputPlaceholder: "https://twitch.tv/your_channel",
+    pricingModel: "per_unit",
+  },
+
+  "twitch-clip-views": {
+    name: "Twitch Clip Views",
+    unitPriceUsd: 0.01,
+    minQty: 100,
+    maxQty: 10000,
+    unitLabel: "views",
+    platformLabel: "Twitch",
+    returnPath: "/order/twitch-clip-views",
+    inputType: "twitch_clip",
+    inputLabel: "Twitch clip URL",
+    inputPlaceholder: "https://clips.twitch.tv/yourclip",
+    pricingModel: "per_unit",
+  },
+
+  // =========================
+  // X (Twitter)
+  // =========================
+
+  "x-followers": {
+    name: "X Followers",
+    unitPriceUsd: 0.02,
+    minQty: 100,
+    maxQty: 100000,
+    unitLabel: "followers",
+    platformLabel: "X",
+    returnPath: "/order/x-followers",
+    inputType: "x_username",
+    inputLabel: "X username",
+    inputPlaceholder: "@yourusername",
+    pricingModel: "per_unit",
+  },
+
+  "x-impressions": {
+    name: "X Impressions",
+    unitPriceUsd: 0.001,
+    minQty: 1000,
+    maxQty: 1000000,
+    unitLabel: "impressions",
+    platformLabel: "X",
+    returnPath: "/order/x-impressions",
+    inputType: "x_post",
+    inputLabel: "Post URL",
+    inputPlaceholder: "https://x.com/yourpost",
+    pricingModel: "per_unit",
+  },
+
+  "x-likes": {
+    name: "X Likes",
+    unitPriceUsd: 0.01,
+    minQty: 200,
+    maxQty: 10000,
+    unitLabel: "likes",
+    platformLabel: "X",
+    returnPath: "/order/x-likes",
+    inputType: "x_post",
+    inputLabel: "Post URL",
+    inputPlaceholder: "https://x.com/yourpost",
+    pricingModel: "per_unit",
+  },
+
+  // =========================
+  // TikTok
+  // =========================
+
+  "tiktok-followers": {
+    name: "TikTok Followers",
+    unitPriceUsd: 0.02,
+    minQty: 100,
+    maxQty: 100000,
+    unitLabel: "followers",
+    platformLabel: "TikTok",
+    returnPath: "/order/tiktok-followers",
+    inputType: "tiktok_username",
+    inputLabel: "TikTok username",
+    inputPlaceholder: "@yourusername",
+    pricingModel: "per_unit",
+  },
+
+  "tiktok-views": {
+    name: "TikTok Views",
+    unitPriceUsd: 0.002,
+    minQty: 1000,
+    maxQty: 100000,
+    unitLabel: "views",
+    platformLabel: "TikTok",
+    returnPath: "/order/tiktok-views",
+    inputType: "tiktok_video",
+    inputLabel: "TikTok video link",
+    inputPlaceholder: "https://tiktok.com/@username/video/...",
+    pricingModel: "per_unit",
+  },
+
+  "tiktok-likes": {
+    name: "TikTok Likes",
+    unitPriceUsd: 0.003,
+    minQty: 300,
+    maxQty: 10000,
+    unitLabel: "likes",
+    platformLabel: "TikTok",
+    returnPath: "/order/tiktok-likes",
+    inputType: "tiktok_video",
+    inputLabel: "TikTok video link",
+    inputPlaceholder: "https://tiktok.com/@username/video/...",
+    pricingModel: "per_unit",
+  },
+
+  // =========================
+  // Snapchat
+  // =========================
+
+  "snapchat-followers": {
+    name: "Snapchat Followers",
+    unitPriceUsd: 0.03,
+    minQty: 50,
+    maxQty: 5000,
+    unitLabel: "followers",
+    platformLabel: "Snapchat",
+    returnPath: "/order/snapchat-followers",
+    inputType: "snapchat_username",
+    inputLabel: "Snapchat username",
+    inputPlaceholder: "your_username",
+    pricingModel: "per_unit",
+  },
 }
 
 app.get("/", (req, res) => {
