@@ -550,7 +550,7 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
     // That lets the hosted NOWPayments page handle crypto selection,
     // based on the coins enabled in your NOWPayments account.
 
-    const r = await fetch("https://api.nowpayments.io/v1/payment", {
+    const r = await fetch("https://api.nowpayments.io/v1/invoice", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
