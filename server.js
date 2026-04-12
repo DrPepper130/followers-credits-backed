@@ -1396,10 +1396,12 @@ app.post("/api/orders/create", async (req, res) => {
       },
     }
 
-    const product = PRODUCTS[productSlug]
+    if (!productSlug) {
+      return res.status(400).json({ error: "Missing productSlug" })
+    }
 
-    if (!product) {
-      return res.status(400).json({ error: "Invalid product" })
+    if (!unitPriceUsd || unitPriceUsd <= 0) {
+      return res.status(400).json({ error: "Invalid price" })
     }
 
     if (cleanQuantity < product.minQty || cleanQuantity > product.maxQty) {
