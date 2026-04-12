@@ -895,65 +895,168 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
       productName,
       unitPriceUsd,
       quantity,
-      targetValue,
       email,
+      targetValue,
+      instagramUsername,
       returnPath,
+      minQty,
+      maxQty,
     } = req.body
 
-    if (!productSlug)
+    const cleanTargetValue = String(
+      targetValue || instagramUsername || ""
+    ).trim()
+    const cleanQuantity = Number(quantity)
+    const cleanEmail = String(email || "")
+      .trim()
+      .toLowerCase()
+    const cleanUnitPriceUsd = Number(unitPriceUsd)
+    const cleanReturnPath = String(returnPath || "").trim()
+
+    if (!productSlug) {
       return res.status(400).json({ error: "Missing productSlug" })
+    }
 
-    if (!productName)
+    if (!productName) {
       return res.status(400).json({ error: "Missing productName" })
+    }
 
-    if (!unitPriceUsd || unitPriceUsd <= 0)
-      return res.status(400).json({ error: "Invalid price" })
+    if (!cleanTargetValue) {
+      return res.status(400).json({ error: "Missing target value" })
+    }
 
-    if (!quantity || quantity <= 0)
-      return res.status(400).json({ error: "Invalid quantity" })
+    if (!cleanEmail.includes("@")) {
+      return res.status(400).json({ error: "Valid email required" })
+    }
 
-    if (!email)
-      return res.status(400).json({ error: "Missing email" })
+    if (!Number.isFinite(cleanQuantity) || cleanQuantity <= 0) {
+      return res.status(400).json({ error: "Quantity must be positive" })
+    }
 
-    const usdAmount = Number(unitPriceUsd) * Number(quantity)
+    if (!Number.isFinite(cleanUnitPriceUsd) || cleanUnitPriceUsd <= 0) {
+      return res.status(400).json({ error: "Invalid unit price" })
+    }
 
-    const orderId =
-      "guest_" +
-      Date.now() +
-      "_" +
-      Math.random().toString(36).slice(2, 10)
+    if (
+      Number.isFinite(Number(minQty)) &&
+      cleanQuantity < Number(minQty)
+    ) {
+      return res.status(400).json({
+        error: `Quantity must be at least ${Number(minQty)}`,
+      })
+    }
 
-    const payment = await createNowPaymentsInvoice({
-      orderId,
-      usdAmount,
-      email,
-      productName,
-      returnUrl: `${SITE_URL}${returnPath}?orderId=${orderId}&email=${encodeURIComponent(email)}&checkout=crypto`,
+    if (
+      Number.isFinite(Number(maxQty)) &&
+      cleanQuantity > Number(maxQty)
+    ) {
+      return res.status(400).json({
+        error: `Quantity must be at most ${Number(maxQty)}`,
+      })
+    }
+
+    if (!cleanReturnPath.startsWith("/")) {
+      return res.status(400).json({ error: "Invalid returnPath" })
+    }
+
+    const usdAmount = Number(
+      (cleanQuantity * cleanUnitPriceUsd).toFixed(2)
+    )
+
+    const providerOrderId = `guest_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2, 10)}`
+
+    const appBase = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "")
+    const returnUrl =
+      `${appBase}${cleanReturnPath}` +
+      `?orderId=${encodeURIComponent(providerOrderId)}` +
+      `&email=${encodeURIComponent(cleanEmail)}` +
+      `&checkout=crypto`
+
+    const payload = {
+      price_amount: usdAmount,
+      price_currency: "usd",
+      order_id: providerOrderId,
+      order_description: `${productName} for ${cleanTargetValue} (${cleanQuantity})`,
+      ipn_callback_url: `${process.env.BACKEND_BASE_URL}/api/nowpayments/guest-ipn`,
+      success_url: returnUrl,
+      cancel_url: returnUrl,
+    }
+
+    const r = await fetch("https://api.nowpayments.io/v1/invoice", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.NOWPAYMENTS_API_KEY,
+      },
+      body: JSON.stringify(payload),
     })
 
-    await supabase.from("orders").insert({
-      email,
+    const data = await r.json()
+
+    if (!r.ok) {
+      console.error("NOWPayments create-guest-payment error:", data)
+      return res.status(500).json({
+        error: "Failed to create payment",
+        details: data,
+      })
+    }
+
+    if (!data.invoice_url) {
+      return res.status(500).json({
+        error: "NOWPayments did not return a hosted invoice URL",
+        details: data,
+      })
+    }
+
+    const insertPayload = {
+      email: cleanEmail,
       product_slug: productSlug,
       product_name: productName,
-      instagram_username: targetValue,
-      quantity,
-      unit_price_usd: unitPriceUsd,
+      instagram_username: cleanTargetValue,
+      quantity: cleanQuantity,
+      unit_price_usd: cleanUnitPriceUsd,
       usd_amount: usdAmount,
       provider: "nowpayments",
-      provider_order_id: orderId,
-      status: "waiting",
-      invoice_url: payment.invoice_url,
-      checkout_return_url: `${SITE_URL}${returnPath}?orderId=${orderId}&email=${encodeURIComponent(email)}&checkout=crypto`,
-    })
+      provider_payment_id: data.payment_id ? String(data.payment_id) : null,
+      provider_order_id: providerOrderId,
+      pay_currency: data.pay_currency || null,
+      pay_amount: data.pay_amount || null,
+      pay_address: data.pay_address || null,
+      status: data.payment_status || "waiting",
+      invoice_url: data.invoice_url,
+      checkout_return_url: returnUrl,
+    }
+
+    const { error } = await supabase
+      .from("guest_order_payments")
+      .insert(insertPayload)
+
+    if (error) {
+      console.error("Supabase save guest payment error:", error)
+      return res.status(500).json({
+        error: "Failed to save guest payment",
+        details: error.message,
+      })
+    }
 
     return res.json({
-      orderId,
-      invoiceUrl: payment.invoice_url,
+      success: true,
+      orderId: providerOrderId,
+      invoiceUrl: data.invoice_url,
+      status: data.payment_status || "waiting",
+      productName,
+      quantity: cleanQuantity,
+      usdAmount,
+      unitPriceUsd: cleanUnitPriceUsd,
+      returnUrl,
     })
   } catch (err) {
-    console.error(err)
+    console.error("create-guest-payment fatal error:", err)
     return res.status(500).json({
       error: "Server error",
+      details: String(err),
     })
   }
 })
@@ -1336,47 +1439,62 @@ app.post("/api/orders/create", async (req, res) => {
       return res.status(401).json({ error: "Invalid auth token" })
     }
 
-    const { productSlug, instagramUsername, quantity } = req.body
+    const {
+      productSlug,
+      productName,
+      unitPriceUsd,
+      quantity,
+      targetValue,
+      instagramUsername,
+      minQty,
+      maxQty,
+    } = req.body
 
-    if (!productSlug || !instagramUsername || quantity === undefined) {
-      return res.status(400).json({ error: "Missing required fields" })
+    const cleanTargetValue = String(
+      targetValue || instagramUsername || ""
+    ).trim()
+    const cleanQuantity = Number(quantity)
+    const cleanUnitPriceUsd = Number(unitPriceUsd)
+
+    if (!productSlug) {
+      return res.status(400).json({ error: "Missing productSlug" })
     }
 
-    const cleanUsername = String(instagramUsername).trim().replace(/^@/, "")
-    const cleanQuantity = Number(quantity)
+    if (!productName) {
+      return res.status(400).json({ error: "Missing productName" })
+    }
 
-    if (!cleanUsername) {
-      return res.status(400).json({ error: "Instagram username required" })
+    if (!cleanTargetValue) {
+      return res.status(400).json({ error: "Missing target value" })
     }
 
     if (!Number.isFinite(cleanQuantity) || cleanQuantity <= 0) {
       return res.status(400).json({ error: "Quantity must be positive" })
     }
 
-    const PRODUCTS = {
-      "instagram-demo": {
-        name: "Instagram Demo",
-        creditsPerUnit: 1,
-        minQty: 1,
-        maxQty: 10000,
-      },
+    if (!Number.isFinite(cleanUnitPriceUsd) || cleanUnitPriceUsd <= 0) {
+      return res.status(400).json({ error: "Invalid unit price" })
     }
 
-    if (!productSlug) {
-      return res.status(400).json({ error: "Missing productSlug" })
-    }
-
-    if (!unitPriceUsd || unitPriceUsd <= 0) {
-      return res.status(400).json({ error: "Invalid price" })
-    }
-
-    if (cleanQuantity < product.minQty || cleanQuantity > product.maxQty) {
+    if (
+      Number.isFinite(Number(minQty)) &&
+      cleanQuantity < Number(minQty)
+    ) {
       return res.status(400).json({
-        error: `Quantity must be between ${product.minQty} and ${product.maxQty}`,
+        error: `Quantity must be at least ${Number(minQty)}`,
       })
     }
 
-    const creditCost = cleanQuantity * product.creditsPerUnit
+    if (
+      Number.isFinite(Number(maxQty)) &&
+      cleanQuantity > Number(maxQty)
+    ) {
+      return res.status(400).json({
+        error: `Quantity must be at most ${Number(maxQty)}`,
+      })
+    }
+
+    const creditCost = cleanQuantity
 
     const { data: wallet, error: walletErr } = await supabase
       .from("wallets")
@@ -1402,9 +1520,9 @@ app.post("/api/orders/create", async (req, res) => {
       .from("orders")
       .insert({
         user_id: user.id,
-        product_name: product.name,
+        product_name: productName,
         quantity: cleanQuantity,
-        instagram_username: cleanUsername,
+        instagram_username: cleanTargetValue,
         amount: creditCost,
         status: "pending",
       })
@@ -1454,9 +1572,9 @@ app.post("/api/orders/create", async (req, res) => {
         orderId: order.id,
         userId: user.id,
         productSlug,
-        productName: product.name,
+        productName,
         creditCost,
-        instagramUsername: cleanUsername,
+        instagramUsername: cleanTargetValue,
         quantity: cleanQuantity,
       }),
     })
@@ -1483,13 +1601,14 @@ app.post("/api/orders/create", async (req, res) => {
     return res.json({
       success: true,
       orderId: order.id,
-      productName: product.name,
+      productName,
       quantity: cleanQuantity,
       creditCost,
       status: "completed",
       newBalance,
     })
   } catch (err) {
+    console.error("create order fatal error:", err)
     return res.status(500).json({
       error: "Server error",
       details: String(err),
