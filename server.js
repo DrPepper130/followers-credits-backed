@@ -363,19 +363,40 @@ app.post(
         })
       }
 
-      let query = supabase
-        .from("guest_order_payments")
-        .select("*")
+      let existingRow = null
+      let findErr = null
 
-      if (providerPaymentId) {
-        query = query.eq("provider_payment_id", String(providerPaymentId))
-      } else {
-        query = query.eq("provider_order_id", String(providerOrderId))
+      // 1) First try your own stable order id
+      if (providerOrderId) {
+        const byOrder = await supabase
+          .from("guest_order_payments")
+          .select("*")
+          .eq("provider_order_id", String(providerOrderId))
+          .single()
+
+        if (!byOrder.error && byOrder.data) {
+          existingRow = byOrder.data
+        } else {
+          findErr = byOrder.error
+        }
       }
 
-      const { data: existingRow, error: findErr } = await query.single()
+      // 2) Fallback to NOWPayments payment id
+      if (!existingRow && providerPaymentId) {
+        const byPayment = await supabase
+          .from("guest_order_payments")
+          .select("*")
+          .eq("provider_payment_id", String(providerPaymentId))
+          .single()
 
-      if (findErr || !existingRow) {
+        if (!byPayment.error && byPayment.data) {
+          existingRow = byPayment.data
+        } else {
+          findErr = byPayment.error
+        }
+      }
+
+      if (!existingRow) {
         console.error("guest-ipn row lookup failed", {
           providerPaymentId,
           providerOrderId,
@@ -438,7 +459,10 @@ app.post(
 
       if (isFinishedStatus(updatedRow.status)) {
         try {
-          webhookResult = await maybeDispatchGuestMakeWebhook(supabase, updatedRow)
+          webhookResult = await maybeDispatchGuestMakeWebhook(
+            supabase,
+            updatedRow
+          )
         } catch (webhookErr) {
           console.error("guest Make webhook dispatch failed", webhookErr)
 
