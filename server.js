@@ -398,6 +398,31 @@ const PRODUCTS = {
   },
 }
 
+
+
+app.get("/api/products/:slug", async (req, res) => {
+  try {
+    const slug = String(req.params.slug || "").trim()
+    const product = PRODUCTS[slug]
+
+    if (!product) {
+      return res.status(404).json({ error: "Product not found" })
+    }
+
+    return res.json({
+      slug,
+      ...product,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
 app.get("/", (req, res) => {
   res.status(200).send("OK")
 })
