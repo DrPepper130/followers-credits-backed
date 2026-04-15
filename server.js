@@ -1951,6 +1951,94 @@ app.get("/api/orders/my-orders", async (req, res) => {
 
 const PORT = process.env.PORT || 3000
 
+
+
+app.get("/api/history/my-history", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || ""
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null
+
+    if (!token) {
+      return res.status(401).json({ error: "Missing auth token" })
+    }
+
+    const {
+      data: { user },
+      error: authErr,
+    } = await supabase.auth.getUser(token)
+
+    if (authErr || !user) {
+      return res.status(401).json({ error: "Invalid auth token" })
+    }
+
+    const { data: orders, error: ordersErr } = await supabase
+      .from("orders")
+      .select("id, product_name, quantity, instagram_username, amount, status, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+
+    if (ordersErr) {
+      return res.status(500).json({
+        error: "Failed to load orders",
+        details: ordersErr.message,
+      })
+    }
+
+    const { data: taskRewards, error: taskErr } = await supabase
+      .from("task_submissions")
+      .select("id, task_title, reward_credits, status, created_at")
+      .eq("user_id", user.id)
+      .eq("status", "approved")
+      .order("created_at", { ascending: false })
+
+    if (taskErr) {
+      return res.status(500).json({
+        error: "Failed to load task rewards",
+        details: taskErr.message,
+      })
+    }
+
+    const normalizedOrders = (orders || []).map((order) => ({
+      id: `order-${order.id}`,
+      entry_type: "order",
+      title: order.product_name || "Order",
+      username: order.instagram_username || "",
+      quantity: order.quantity ?? null,
+      credits: -Math.abs(Number(order.amount || 0)),
+      status: order.status || "completed",
+      created_at: order.created_at,
+    }))
+
+    const normalizedTaskRewards = (taskRewards || []).map((task) => ({
+      id: `task-${task.id}`,
+      entry_type: "task_reward",
+      title: task.task_title || "Task Reward",
+      username: "",
+      quantity: null,
+      credits: Math.abs(Number(task.reward_credits || 0)),
+      status: task.status || "approved",
+      created_at: task.created_at,
+    }))
+
+    const merged = [...normalizedOrders, ...normalizedTaskRewards].sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )
+
+    return res.json(merged)
+  } catch (err) {
+    console.error("my-history fatal error:", err)
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`)
 })
