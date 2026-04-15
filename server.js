@@ -1128,7 +1128,7 @@ app.post("/api/orders/create-guest-intent", async (req, res) => {
       })
     }
 
-    const estimatedCredits = cleanQuantity
+    const estimatedCredits = Math.round(cleanQuantity * cleanUnitPriceUsd * 100)
 
     const { error } = await supabase.from("guest_order_intents").insert({
       email: cleanEmail,
@@ -1494,7 +1494,7 @@ app.post("/api/orders/create", async (req, res) => {
       })
     }
 
-    const creditCost = cleanQuantity
+    const creditCost = Math.round(cleanQuantity * cleanUnitPriceUsd * 100)
 
     const { data: wallet, error: walletErr } = await supabase
       .from("wallets")
