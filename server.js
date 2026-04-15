@@ -72,6 +72,74 @@ async function requireAdmin(req, res) {
 
 
 
+app.post("/api/tasks/submit", async (req, res) => {
+  try {
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const {
+      platform,
+      taskTitle,
+      rewardCredits,
+      proofUrl,
+    } = req.body
+
+    const cleanPlatform = String(platform || "").trim()
+    const cleanTaskTitle = String(taskTitle || "").trim()
+    const cleanProofUrl = String(proofUrl || "").trim()
+    const cleanRewardCredits = Number(rewardCredits)
+
+    if (!cleanPlatform) {
+      return res.status(400).json({ error: "Missing platform" })
+    }
+
+    if (!cleanTaskTitle) {
+      return res.status(400).json({ error: "Missing taskTitle" })
+    }
+
+    if (!cleanProofUrl || !/^https?:\/\//i.test(cleanProofUrl)) {
+      return res.status(400).json({ error: "Valid proof URL required" })
+    }
+
+    if (!Number.isInteger(cleanRewardCredits) || cleanRewardCredits <= 0) {
+      return res.status(400).json({ error: "Invalid rewardCredits" })
+    }
+
+    const { data, error } = await supabase
+      .from("task_submissions")
+      .insert({
+        user_id: user.id,
+        platform: cleanPlatform,
+        task_title: cleanTaskTitle,
+        reward_credits: cleanRewardCredits,
+        proof_url: cleanProofUrl,
+        status: "pending",
+      })
+      .select()
+      .single()
+
+    if (error || !data) {
+      return res.status(500).json({
+        error: "Failed to save task submission",
+        details: error?.message || "Unknown error",
+      })
+    }
+
+    return res.json({
+      success: true,
+      submission: data,
+    })
+  } catch (err) {
+    console.error("task submit fatal error:", err)
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
 // Credit / wallet top-up packages
 const PRODUCTS = {
   // =========================
