@@ -27,6 +27,51 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
+
+
+function getBearerToken(req) {
+  const authHeader = req.headers.authorization || ""
+  return authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null
+}
+
+async function requireUser(req, res) {
+  const token = getBearerToken(req)
+
+  if (!token) {
+    res.status(401).json({ error: "Missing auth token" })
+    return null
+  }
+
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser(token)
+
+  if (error || !user) {
+    res.status(401).json({ error: "Invalid auth token" })
+    return null
+  }
+
+  return user
+}
+
+async function requireAdmin(req, res) {
+  const user = await requireUser(req, res)
+  if (!user) return null
+
+  const adminEmail = String(process.env.ADMIN_EMAIL || "").trim().toLowerCase()
+  const userEmail = String(user.email || "").trim().toLowerCase()
+
+  if (!adminEmail || userEmail !== adminEmail) {
+    res.status(403).json({ error: "Admin access required" })
+    return null
+  }
+
+  return user
+}
+
+
+
 // Credit / wallet top-up packages
 const PRODUCTS = {
   // =========================
