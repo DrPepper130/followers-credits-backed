@@ -140,6 +140,187 @@ app.post("/api/tasks/submit", async (req, res) => {
 
 
 
+app.get("/api/admin/tasks/submissions", async (req, res) => {
+  try {
+    const adminUser = await requireAdmin(req, res)
+    if (!adminUser) return
+
+    const status = String(req.query.status || "pending").trim().toLowerCase()
+
+    const validStatuses = ["pending", "approved", "rejected"]
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: "Invalid status" })
+    }
+
+    const { data, error } = await supabase
+      .from("task_submissions")
+      .select("*")
+      .eq("status", status)
+      .order("created_at", { ascending: false })
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to load task submissions",
+        details: error.message,
+      })
+    }
+
+    return res.json(data || [])
+  } catch (err) {
+    console.error("admin submissions fatal error:", err)
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+app.post("/api/admin/tasks/:id/approve", async (req, res) => {
+  try {
+    const adminUser = await requireAdmin(req, res)
+    if (!adminUser) return
+
+    const submissionId = Number(req.params.id)
+
+    if (!Number.isInteger(submissionId) || submissionId <= 0) {
+      return res.status(400).json({ error: "Invalid submission id" })
+    }
+
+    const { data: submission, error: submissionErr } = await supabase
+      .from("task_submissions")
+      .select("*")
+      .eq("id", submissionId)
+      .single()
+
+    if (submissionErr || !submission) {
+      return res.status(404).json({ error: "Submission not found" })
+    }
+
+    if (submission.status !== "pending") {
+      return res.status(400).json({ error: "Submission is not pending" })
+    }
+
+    const { data: wallet, error: walletErr } = await supabase
+      .from("wallets")
+      .select("credit_balance")
+      .eq("user_id", submission.user_id)
+      .single()
+
+    if (walletErr || !wallet) {
+      return res.status(500).json({ error: "Wallet not found" })
+    }
+
+    const newBalance = Number(wallet.credit_balance || 0) + Number(submission.reward_credits || 0)
+
+    const { error: updateWalletErr } = await supabase
+      .from("wallets")
+      .update({ credit_balance: newBalance })
+      .eq("user_id", submission.user_id)
+
+    if (updateWalletErr) {
+      return res.status(500).json({
+        error: "Failed to update wallet",
+        details: updateWalletErr.message,
+      })
+    }
+
+    const { error: txErr } = await supabase
+      .from("credit_transactions")
+      .insert({
+        user_id: submission.user_id,
+        amount: submission.reward_credits,
+        type: "task_reward",
+      })
+
+    if (txErr) {
+      return res.status(500).json({
+        error: "Failed to log credit transaction",
+        details: txErr.message,
+      })
+    }
+
+    const { data: updatedSubmission, error: updateSubmissionErr } = await supabase
+      .from("task_submissions")
+      .update({
+        status: "approved",
+        reviewed_by: adminUser.id,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq("id", submission.id)
+      .eq("status", "pending")
+      .select()
+      .single()
+
+    if (updateSubmissionErr || !updatedSubmission) {
+      return res.status(500).json({
+        error: "Failed to mark submission approved",
+        details: updateSubmissionErr?.message || "Unknown error",
+      })
+    }
+
+    return res.json({
+      success: true,
+      submission: updatedSubmission,
+      newBalance,
+    })
+  } catch (err) {
+    console.error("approve task fatal error:", err)
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
+app.post("/api/admin/tasks/:id/reject", async (req, res) => {
+  try {
+    const adminUser = await requireAdmin(req, res)
+    if (!adminUser) return
+
+    const submissionId = Number(req.params.id)
+    const adminNotes = String(req.body.adminNotes || "").trim()
+
+    if (!Number.isInteger(submissionId) || submissionId <= 0) {
+      return res.status(400).json({ error: "Invalid submission id" })
+    }
+
+    const { data: updatedSubmission, error } = await supabase
+      .from("task_submissions")
+      .update({
+        status: "rejected",
+        admin_notes: adminNotes || null,
+        reviewed_by: adminUser.id,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq("id", submissionId)
+      .eq("status", "pending")
+      .select()
+      .single()
+
+    if (error || !updatedSubmission) {
+      return res.status(404).json({
+        error: "Pending submission not found or already reviewed",
+        details: error?.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      submission: updatedSubmission,
+    })
+  } catch (err) {
+    console.error("reject task fatal error:", err)
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
 // Credit / wallet top-up packages
 const PRODUCTS = {
   // =========================
