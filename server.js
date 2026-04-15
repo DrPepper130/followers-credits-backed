@@ -1656,7 +1656,7 @@ app.post(
         .from("credit_topups")
         .update({
           provider_payment_id: String(payment_id ?? existing.provider_payment_id),
-          status: payment_status,
+          status: isPaidEnough ? "finished" : payment_status,
           paid_at:
             payment_status === "finished"
               ? (existing.paid_at || new Date().toISOString())
@@ -1668,7 +1668,13 @@ app.post(
         return res.status(200).send("already processed")
       }
 
-      if (payment_status !== "finished") {
+      const originalPrice = Number(payload.price_amount || existing.usd_amount || 0)
+      const actuallyPaid = Number(payload.actually_paid_fiat || 0)
+
+      const isPaidEnough =
+        actuallyPaid >= originalPrice * 0.99
+
+      if (payment_status !== "finished" && !isPaidEnough) {
         return res.status(200).send("ignored")
       }
 
