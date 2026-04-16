@@ -1794,7 +1794,11 @@ app.post("/api/orders/create", async (req, res) => {
       })
     }
 
+    // Internal balance unit stays the same: 1 credit = 1 cent
     const creditCost = Math.round(cleanQuantity * cleanUnitPriceUsd * 100)
+
+    // External/display value for Make / Discord / frontend
+    const usdAmount = Number((creditCost / 100).toFixed(2))
 
     const { data: wallet, error: walletErr } = await supabase
       .from("wallets")
@@ -1873,7 +1877,7 @@ app.post("/api/orders/create", async (req, res) => {
         userId: user.id,
         productSlug,
         productName,
-        creditCost,
+        usdAmount,
         instagramUsername: cleanTargetValue,
         quantity: cleanQuantity,
       }),
@@ -1903,6 +1907,7 @@ app.post("/api/orders/create", async (req, res) => {
       orderId: order.id,
       productName,
       quantity: cleanQuantity,
+      usdAmount,
       creditCost,
       status: "completed",
       newBalance,
