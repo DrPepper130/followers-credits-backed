@@ -70,7 +70,32 @@ async function requireAdmin(req, res) {
   return user
 }
 
+app.get("/api/wallet/balance", async (req, res) => {
+  try {
+    const user = await requireUser(req, res)
+    if (!user) return
 
+    const { data: wallet, error } = await supabase
+      .from("wallets")
+      .select("credit_balance")
+      .eq("user_id", user.id)
+      .single()
+
+    if (error || !wallet) {
+      return res.status(404).json({ error: "Wallet not found" })
+    }
+
+    return res.json({
+      creditBalance: Number(wallet.credit_balance || 0),
+      usdBalance: Number(wallet.credit_balance || 0) / 100,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
 
 app.post("/api/tasks/submit", async (req, res) => {
   try {
