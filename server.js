@@ -55,6 +55,39 @@ async function requireUser(req, res) {
   return user
 }
 
+
+const { data: availableCode, error: codeErr } = await supabase
+  .from("product_codes")
+  .select("*")
+  .eq("product_slug", productSlug)
+  .eq("is_used", false)
+  .order("id", { ascending: true })
+  .limit(1)
+  .single()
+
+if (codeErr || !availableCode) {
+  return res.status(500).json({
+    error: "No delivery code available",
+  })
+}
+
+const { error: markCodeErr } = await supabase
+  .from("product_codes")
+  .update({
+    is_used: true,
+    used_by_user_id: user.id,
+    used_for_order_id: order.id,
+    used_at: new Date().toISOString(),
+  })
+  .eq("id", availableCode.id)
+
+if (markCodeErr) {
+  return res.status(500).json({
+    error: "Failed to reserve delivery code",
+  })
+}
+
+
 async function requireAdmin(req, res) {
   const user = await requireUser(req, res)
   if (!user) return null
