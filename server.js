@@ -86,7 +86,16 @@ if (markCodeErr) {
     error: "Failed to reserve delivery code",
   })
 }
-
+return res.json({
+  success: true,
+  orderId: order.id,
+  productName,
+  quantity: cleanQuantity,
+  creditCost,
+  status: "completed",
+  newBalance,
+  deliveryMessage: `Your code: ${availableCode.code_value}`,
+})
 
 async function requireAdmin(req, res) {
   const user = await requireUser(req, res)
