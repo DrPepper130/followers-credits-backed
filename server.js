@@ -56,46 +56,7 @@ async function requireUser(req, res) {
 }
 
 
-const { data: availableCode, error: codeErr } = await supabase
-  .from("product_codes")
-  .select("*")
-  .eq("product_slug", productSlug)
-  .eq("is_used", false)
-  .order("id", { ascending: true })
-  .limit(1)
-  .single()
 
-if (codeErr || !availableCode) {
-  return res.status(500).json({
-    error: "No delivery code available",
-  })
-}
-
-const { error: markCodeErr } = await supabase
-  .from("product_codes")
-  .update({
-    is_used: true,
-    used_by_user_id: user.id,
-    used_for_order_id: order.id,
-    used_at: new Date().toISOString(),
-  })
-  .eq("id", availableCode.id)
-
-if (markCodeErr) {
-  return res.status(500).json({
-    error: "Failed to reserve delivery code",
-  })
-}
-return res.json({
-  success: true,
-  orderId: order.id,
-  productName,
-  quantity: cleanQuantity,
-  creditCost,
-  status: "completed",
-  newBalance,
-  deliveryMessage: `Your code: ${availableCode.code_value}`,
-})
 
 async function requireAdmin(req, res) {
   const user = await requireUser(req, res)
@@ -111,6 +72,179 @@ async function requireAdmin(req, res) {
 
   return user
 }
+
+
+async function reserveNextProductCode({ productSlug, userId, orderId }) {
+  const { data: availableCode, error: codeErr } = await supabase
+    .from("product_codes")
+    .select("*")
+    .eq("product_slug", productSlug)
+    .eq("is_used", false)
+    .order("id", { ascending: true })
+    .limit(1)
+    .single()
+
+  if (codeErr || !availableCode) {
+    return {
+      ok: false,
+      error: "No delivery code available",
+      code: null,
+    }
+  }
+
+  const { error: markCodeErr } = await supabase
+    .from("product_codes")
+    .update({
+      is_used: true,
+      used_by_user_id: userId,
+      used_for_order_id: orderId,
+      used_at: new Date().toISOString(),
+    })
+    .eq("id", availableCode.id)
+
+  if (markCodeErr) {
+    return {
+      ok: false,
+      error: "Failed to reserve delivery code",
+      code: null,
+    }
+  }
+
+  return {
+    ok: true,
+    error: null,
+    code: availableCode.code_value,
+  }
+}
+
+app.post("/api/admin/codes/add", async (req, res) => {
+  try {
+    const adminUser = await requireAdmin(req, res)
+    if (!adminUser) return
+
+    const productSlug = String(req.body.productSlug || "").trim()
+    const codes = Array.isArray(req.body.codes) ? req.body.codes : []
+
+    if (!productSlug) {
+      return res.status(400).json({ error: "Missing productSlug" })
+    }
+
+    const cleanCodes = codes
+      .map((code) => String(code || "").trim())
+      .filter(Boolean)
+
+    if (cleanCodes.length === 0) {
+      return res.status(400).json({ error: "No codes provided" })
+    }
+
+    const rows = cleanCodes.map((codeValue) => ({
+      product_slug: productSlug,
+      code_value: codeValue,
+      is_used: false,
+    }))
+
+    const { error } = await supabase.from("product_codes").insert(rows)
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to add codes",
+        details: error.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      insertedCount: rows.length,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+app.get("/api/admin/codes/list", async (req, res) => {
+  try {
+    const adminUser = await requireAdmin(req, res)
+    if (!adminUser) return
+
+    const productSlug = String(req.query.productSlug || "").trim()
+
+    if (!productSlug) {
+      return res.status(400).json({ error: "Missing productSlug" })
+    }
+
+    const { data, error } = await supabase
+      .from("product_codes")
+      .select("*")
+      .eq("product_slug", productSlug)
+      .order("is_used", { ascending: true })
+      .order("id", { ascending: true })
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to load codes",
+        details: error.message,
+      })
+    }
+
+    return res.json(data || [])
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+app.post("/api/admin/codes/delete/:id", async (req, res) => {
+  try {
+    const adminUser = await requireAdmin(req, res)
+    if (!adminUser) return
+
+    const id = Number(req.params.id)
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Invalid code id" })
+    }
+
+    const { data: existing, error: existingErr } = await supabase
+      .from("product_codes")
+      .select("*")
+      .eq("id", id)
+      .single()
+
+    if (existingErr || !existing) {
+      return res.status(404).json({ error: "Code not found" })
+    }
+
+    if (existing.is_used) {
+      return res.status(400).json({ error: "Cannot delete a used code" })
+    }
+
+    const { error } = await supabase
+      .from("product_codes")
+      .delete()
+      .eq("id", id)
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to delete code",
+        details: error.message,
+      })
+    }
+
+    return res.json({ success: true })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
 
 app.get("/api/wallet/balance", async (req, res) => {
   try {
@@ -1719,13 +1853,18 @@ app.post(
         return res.status(404).send("topup not found")
       }
 
+      const originalPrice = Number(payload.price_amount || existing.usd_amount || 0)
+      const actuallyPaid = Number(payload.actually_paid_fiat || 0)
+
+      const isPaidEnough = actuallyPaid >= originalPrice * 0.99
+
       await supabase
         .from("credit_topups")
         .update({
           provider_payment_id: String(payment_id ?? existing.provider_payment_id),
           status: isPaidEnough ? "finished" : payment_status,
           paid_at:
-            payment_status === "finished"
+            payment_status === "finished" || isPaidEnough
               ? (existing.paid_at || new Date().toISOString())
               : existing.paid_at,
         })
@@ -1734,12 +1873,6 @@ app.post(
       if (existing.status === "finished") {
         return res.status(200).send("already processed")
       }
-
-      const originalPrice = Number(payload.price_amount || existing.usd_amount || 0)
-      const actuallyPaid = Number(payload.actually_paid_fiat || 0)
-
-      const isPaidEnough =
-        actuallyPaid >= originalPrice * 0.99
 
       if (payment_status !== "finished" && !isPaidEnough) {
         return res.status(200).send("ignored")
@@ -1861,10 +1994,7 @@ app.post("/api/orders/create", async (req, res) => {
       })
     }
 
-    // Internal balance unit stays the same: 1 credit = 1 cent
     const creditCost = Math.round(cleanQuantity * cleanUnitPriceUsd * 100)
-
-    // External/display value for Make / Discord / frontend
     const usdAmount = Number((creditCost / 100).toFixed(2))
 
     const { data: wallet, error: walletErr } = await supabase
@@ -1969,6 +2099,30 @@ app.post("/api/orders/create", async (req, res) => {
       })
     }
 
+    let deliveryMessage = ""
+
+    const codeProducts = [
+      "discord-promo",
+      "discord-one-time-code",
+      "nitro-code",
+    ]
+
+    if (codeProducts.includes(productSlug)) {
+      const codeReservation = await reserveNextProductCode({
+        productSlug,
+        userId: user.id,
+        orderId: order.id,
+      })
+
+      if (!codeReservation.ok) {
+        return res.status(500).json({
+          error: codeReservation.error || "No delivery code available",
+        })
+      }
+
+      deliveryMessage = `Your code: ${codeReservation.code}`
+    }
+
     return res.json({
       success: true,
       orderId: order.id,
@@ -1978,6 +2132,7 @@ app.post("/api/orders/create", async (req, res) => {
       creditCost,
       status: "completed",
       newBalance,
+      deliveryMessage,
     })
   } catch (err) {
     console.error("create order fatal error:", err)
