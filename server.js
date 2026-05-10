@@ -2272,6 +2272,336 @@ app.get("/api/history/my-history", async (req, res) => {
 
 
 
+
+
+function hashApiKey(apiKey) {
+  return crypto.createHash("sha256").update(apiKey).digest("hex")
+}
+
+function generateApiKey() {
+  return `fol_${crypto.randomBytes(32).toString("hex")}`
+}
+
+async function requireApiKey(req, res) {
+  const apiKey = String(req.headers["x-api-key"] || "").trim()
+
+  if (!apiKey) {
+    res.status(401).json({ error: "Missing x-api-key header" })
+    return null
+  }
+
+  const keyHash = hashApiKey(apiKey)
+
+  const { data: keyRow, error } = await supabase
+    .from("api_keys")
+    .select("*")
+    .eq("key_hash", keyHash)
+    .eq("is_active", true)
+    .single()
+
+  if (error || !keyRow) {
+    res.status(401).json({ error: "Invalid API key" })
+    return null
+  }
+
+  await supabase
+    .from("api_keys")
+    .update({ last_used_at: new Date().toISOString() })
+    .eq("id", keyRow.id)
+
+  return keyRow
+}
+
+app.post("/api/developer/api-keys/create", async (req, res) => {
+  try {
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const name = String(req.body.name || "Default API Key").trim()
+
+    const apiKey = generateApiKey()
+    const keyHash = hashApiKey(apiKey)
+    const keyPrefix = apiKey.slice(0, 12)
+
+    const { data, error } = await supabase
+      .from("api_keys")
+      .insert({
+        user_id: user.id,
+        name,
+        key_hash: keyHash,
+        key_prefix: keyPrefix,
+      })
+      .select("id, name, key_prefix, is_active, created_at, last_used_at")
+      .single()
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to create API key",
+        details: error.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      apiKey,
+      key: data,
+      warning: "Copy this key now. You will not be able to see it again.",
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+app.get("/api/developer/api-keys", async (req, res) => {
+  try {
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const { data, error } = await supabase
+      .from("api_keys")
+      .select("id, name, key_prefix, is_active, created_at, last_used_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to load API keys",
+        details: error.message,
+      })
+    }
+
+    return res.json(data || [])
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+app.post("/api/developer/api-keys/:id/revoke", async (req, res) => {
+  try {
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const id = String(req.params.id || "").trim()
+
+    const { error } = await supabase
+      .from("api_keys")
+      .update({ is_active: false })
+      .eq("id", id)
+      .eq("user_id", user.id)
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to revoke API key",
+        details: error.message,
+      })
+    }
+
+    return res.json({ success: true })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+app.get("/api/v1/products", async (req, res) => {
+  const keyRow = await requireApiKey(req, res)
+  if (!keyRow) return
+
+  const products = Object.entries(PRODUCTS).map(([slug, product]) => ({
+    slug,
+    name: product.name,
+    unitPriceUsd: product.unitPriceUsd,
+    minQty: product.minQty,
+    maxQty: product.maxQty,
+    unitLabel: product.unitLabel,
+    platformLabel: product.platformLabel,
+    inputType: product.inputType,
+    inputLabel: product.inputLabel,
+  }))
+
+  return res.json({
+    success: true,
+    products,
+  })
+})
+
+app.get("/api/v1/balance", async (req, res) => {
+  const keyRow = await requireApiKey(req, res)
+  if (!keyRow) return
+
+  const { data: wallet, error } = await supabase
+    .from("wallets")
+    .select("credit_balance")
+    .eq("user_id", keyRow.user_id)
+    .single()
+
+  if (error || !wallet) {
+    return res.status(404).json({ error: "Wallet not found" })
+  }
+
+  return res.json({
+    success: true,
+    creditBalance: Number(wallet.credit_balance || 0),
+    usdBalance: Number(wallet.credit_balance || 0) / 100,
+  })
+})
+
+app.post("/api/v1/orders", async (req, res) => {
+  try {
+    const keyRow = await requireApiKey(req, res)
+    if (!keyRow) return
+
+    const productSlug = String(req.body.product_slug || req.body.productSlug || "").trim()
+    const quantity = Number(req.body.quantity)
+    const target = String(req.body.target || req.body.targetValue || "").trim()
+
+    const product = PRODUCTS[productSlug]
+
+    if (!product) {
+      return res.status(400).json({ error: "Invalid product_slug" })
+    }
+
+    if (!target) {
+      return res.status(400).json({ error: "Missing target" })
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return res.status(400).json({ error: "Invalid quantity" })
+    }
+
+    if (quantity < product.minQty) {
+      return res.status(400).json({
+        error: `Quantity must be at least ${product.minQty}`,
+      })
+    }
+
+    if (quantity > product.maxQty) {
+      return res.status(400).json({
+        error: `Quantity must be at most ${product.maxQty}`,
+      })
+    }
+
+    const creditCost = Math.round(quantity * product.unitPriceUsd * 100)
+    const usdAmount = Number((creditCost / 100).toFixed(2))
+
+    const { data: wallet, error: walletErr } = await supabase
+      .from("wallets")
+      .select("credit_balance")
+      .eq("user_id", keyRow.user_id)
+      .single()
+
+    if (walletErr || !wallet) {
+      return res.status(500).json({ error: "Wallet not found" })
+    }
+
+    if (Number(wallet.credit_balance || 0) < creditCost) {
+      return res.status(400).json({
+        error: "Not enough credits",
+        currentBalance: Number(wallet.credit_balance || 0),
+        requiredCredits: creditCost,
+      })
+    }
+
+    const newBalance = Number(wallet.credit_balance || 0) - creditCost
+
+    const { data: order, error: orderErr } = await supabase
+      .from("orders")
+      .insert({
+        user_id: keyRow.user_id,
+        product_name: product.name,
+        quantity,
+        instagram_username: target,
+        amount: creditCost,
+        status: "pending",
+      })
+      .select()
+      .single()
+
+    if (orderErr || !order) {
+      return res.status(500).json({
+        error: "Failed to create order",
+        details: orderErr?.message || "Unknown error",
+      })
+    }
+
+    const { error: updateWalletErr } = await supabase
+      .from("wallets")
+      .update({ credit_balance: newBalance })
+      .eq("user_id", keyRow.user_id)
+
+    if (updateWalletErr) {
+      return res.status(500).json({
+        error: "Failed to deduct credits",
+        details: updateWalletErr.message,
+      })
+    }
+
+    await supabase.from("credit_transactions").insert({
+      user_id: keyRow.user_id,
+      amount: -creditCost,
+      type: "api_purchase",
+    })
+
+    const makeRes = await fetch(process.env.MAKE_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        source: "api",
+        orderId: order.id,
+        userId: keyRow.user_id,
+        productSlug,
+        productName: product.name,
+        usdAmount,
+        instagramUsername: target,
+        quantity,
+      }),
+    })
+
+    if (!makeRes.ok) {
+      return res.status(500).json({
+        error: "Order created, but fulfillment webhook failed",
+        orderId: order.id,
+      })
+    }
+
+    await supabase
+      .from("orders")
+      .update({ status: "completed" })
+      .eq("id", order.id)
+
+    return res.json({
+      success: true,
+      order_id: order.id,
+      product_slug: productSlug,
+      product_name: product.name,
+      target,
+      quantity,
+      credit_cost: creditCost,
+      usd_amount: usdAmount,
+      status: "completed",
+      new_balance: newBalance,
+    })
+  } catch (err) {
+    console.error("api order fatal error:", err)
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
 app.listen(PORT, () => {
   console.log(`Server listening on ${PORT}`)
 })
