@@ -2550,22 +2550,47 @@ app.post("/api/v1/orders", async (req, res) => {
       type: "api_purchase",
     })
 
+    let apiUserEmail = ""
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.admin.getUserById(keyRow.user_id)
+
+      apiUserEmail = user?.email || ""
+    } catch {
+      apiUserEmail = ""
+    }
+
+    const fulfillmentPayload = {
+      productSlug,
+      productName: product.name,
+      email: apiUserEmail,
+      quantity,
+      targetValue: target,
+      instagramUsername: target,
+      orderId: order.id,
+      status: "finished",
+      paymentMethod: "api",
+      creditCost,
+      usdAmount,
+      userId: keyRow.user_id,
+      source: "api",
+    }
+
     const makeRes = await fetch(process.env.MAKE_WEBHOOK_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        source: "api",
-        orderId: order.id,
-        userId: keyRow.user_id,
-        productSlug,
-        productName: product.name,
-        usdAmount,
-        instagramUsername: target,
-        quantity,
-      }),
+      body: JSON.stringify(fulfillmentPayload),
     })
+
+    let makeData = null
+    try {
+      makeData = await makeRes.json()
+    } catch {
+      makeData = null
+    }
 
     if (!makeRes.ok) {
       return res.status(500).json({
@@ -2573,6 +2598,18 @@ app.post("/api/v1/orders", async (req, res) => {
         orderId: order.id,
       })
     }
+
+    await sendDiscordOrderNotification({
+      source: "api",
+      orderId: order.id,
+      orderedAt: new Date().toISOString(),
+      instagramUsername: target,
+      productName: product.name,
+      productSlug,
+      quantity,
+      email: apiUserEmail,
+      userId: keyRow.user_id,
+    })
 
     await supabase
       .from("orders")
@@ -2590,6 +2627,7 @@ app.post("/api/v1/orders", async (req, res) => {
       usd_amount: usdAmount,
       status: "completed",
       new_balance: newBalance,
+      fulfillment: makeData,
     })
   } catch (err) {
     console.error("api order fatal error:", err)
@@ -2599,7 +2637,6 @@ app.post("/api/v1/orders", async (req, res) => {
     })
   }
 })
-
 
 
 app.listen(PORT, () => {
