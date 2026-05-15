@@ -1919,6 +1919,23 @@ app.post(
   }
 )
 
+function extractSafeDeliveryMessage(makeData) {
+  const rawMessage =
+    makeData?.deliveryMessage ||
+    makeData?.message ||
+    makeData?.botInvite ||
+    makeData?.botinvite ||
+    makeData?.bot_invite ||
+    makeData?.deliveryValue ||
+    ""
+
+  const message = String(rawMessage || "").trim()
+
+  if (!message) return ""
+
+  return message
+}
+
 app.post("/api/orders/create", async (req, res) => {
   try {
     const authHeader = req.headers.authorization || ""
@@ -1976,19 +1993,13 @@ app.post("/api/orders/create", async (req, res) => {
       return res.status(400).json({ error: "Invalid unit price" })
     }
 
-    if (
-      Number.isFinite(Number(minQty)) &&
-      cleanQuantity < Number(minQty)
-    ) {
+    if (Number.isFinite(Number(minQty)) && cleanQuantity < Number(minQty)) {
       return res.status(400).json({
         error: `Quantity must be at least ${Number(minQty)}`,
       })
     }
 
-    if (
-      Number.isFinite(Number(maxQty)) &&
-      cleanQuantity > Number(maxQty)
-    ) {
+    if (Number.isFinite(Number(maxQty)) && cleanQuantity > Number(maxQty)) {
       return res.status(400).json({
         error: `Quantity must be at most ${Number(maxQty)}`,
       })
@@ -2075,15 +2086,24 @@ app.post("/api/orders/create", async (req, res) => {
         productSlug,
         productName,
         usdAmount,
+        targetValue: cleanTargetValue,
         instagramUsername: cleanTargetValue,
         quantity: cleanQuantity,
+        paymentMethod: "credits",
       }),
     })
 
+    let makeData = {}
+
+    try {
+      makeData = await makeRes.json()
+    } catch {
+      makeData = {}
+    }
+
     if (!makeRes.ok) {
       return res.status(500).json({
-        error: "Order created, but Make webhook failed",
-        details: `Webhook responded with status ${makeRes.status}`,
+        error: "Order created, but fulfillment failed",
       })
     }
 
@@ -2099,7 +2119,7 @@ app.post("/api/orders/create", async (req, res) => {
       })
     }
 
-    let deliveryMessage = ""
+    let deliveryMessage = extractSafeDeliveryMessage(makeData)
 
     const codeProducts = [
       "discord-promo",
@@ -2107,7 +2127,7 @@ app.post("/api/orders/create", async (req, res) => {
       "nitro-code",
     ]
 
-    if (codeProducts.includes(productSlug)) {
+    if (!deliveryMessage && codeProducts.includes(productSlug)) {
       const codeReservation = await reserveNextProductCode({
         productSlug,
         userId: user.id,
