@@ -2465,12 +2465,13 @@ app.get("/api/history/my-history", async (req, res) => {
 
     const normalizedOrders = (orders || []).map((order) => {
       const title = String(order.product_name || "Order")
-      const isCreditTopup = title.toLowerCase().includes("credits top-up")
+      const isCreditTopup =
+        title.toLowerCase().includes("credits top-up")
 
       return {
         id: `order-${order.id}`,
-        entry_type: isCreditTopup ? "task_reward" : "order",
-        title,
+        entry_type: isCreditTopup ? "credit_topup" : "order",
+        title: isCreditTopup ? "Credit Top-up" : title,
         username: order.instagram_username || "",
         quantity: order.quantity ?? null,
         credits: isCreditTopup
