@@ -2,7 +2,6 @@ import express from "express"
 import crypto from "crypto"
 import cors from "cors"
 import { createClient } from "@supabase/supabase-js"
-npm install stripe
 const app = express()
 import Stripe from "stripe"
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
