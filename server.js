@@ -2,8 +2,10 @@ import express from "express"
 import crypto from "crypto"
 import cors from "cors"
 import { createClient } from "@supabase/supabase-js"
-
+npm install stripe
 const app = express()
+import Stripe from "stripe"
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
 
 app.use(cors({
   origin: "*",
@@ -14,7 +16,8 @@ app.use(cors({
 app.use((req, res, next) => {
   if (
     req.path === "/api/nowpayments/ipn" ||
-    req.path === "/api/nowpayments/guest-ipn"
+    req.path === "/api/nowpayments/guest-ipn" ||
+    req.path === "/api/stripe/webhook"
   ) {
     return next()
   }
@@ -921,6 +924,214 @@ app.get("/api/products/:slug", async (req, res) => {
 app.get("/", (req, res) => {
   res.status(200).send("OK")
 })
+
+
+
+app.post("/api/stripe/create-credit-checkout", async (req, res) => {
+  try {
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const customUsdAmount = Number(req.body.customUsdAmount)
+
+    if (!Number.isFinite(customUsdAmount) || customUsdAmount < 1) {
+      return res.status(400).json({ error: "Minimum top-up is $1.00" })
+    }
+
+    if (customUsdAmount > 1000) {
+      return res.status(400).json({ error: "Maximum top-up is $1,000.00" })
+    }
+
+    const usdAmount = Number(customUsdAmount.toFixed(2))
+    const credits = Math.round(usdAmount * 100)
+    const amountCents = Math.round(usdAmount * 100)
+
+    const orderId = `stripe_credit_${user.id}_${Date.now()}`
+
+    const appBase = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "")
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      client_reference_id: orderId,
+      customer_email: user.email || undefined,
+      success_url: `${appBase}/dashboard?stripeTopup=success&orderId=${encodeURIComponent(orderId)}`,
+      cancel_url: `${appBase}/add-credits?stripeTopup=cancelled`,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            unit_amount: amountCents,
+            product_data: {
+              name: `${credits} Followers.com Credits`,
+              description: `$${usdAmount.toFixed(2)} credit top-up`,
+            },
+          },
+        },
+      ],
+      metadata: {
+        type: "credit_topup",
+        user_id: user.id,
+        order_id: orderId,
+        credits: String(credits),
+        usd_amount: String(usdAmount),
+      },
+      payment_intent_data: {
+        metadata: {
+          type: "credit_topup",
+          user_id: user.id,
+          order_id: orderId,
+          credits: String(credits),
+          usd_amount: String(usdAmount),
+        },
+      },
+    })
+
+    const { error } = await supabase.from("credit_topups").insert({
+      user_id: user.id,
+      provider: "stripe",
+      provider_payment_id: session.id,
+      provider_order_id: orderId,
+      package_id: "custom",
+      usd_amount: usdAmount,
+      credits,
+      pay_currency: "usd",
+      price_amount: usdAmount,
+      status: "created",
+    })
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to save Stripe top-up",
+        details: error.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      checkoutUrl: session.url,
+      sessionId: session.id,
+      orderId,
+      credits,
+      usdAmount,
+    })
+  } catch (err) {
+    console.error("stripe create checkout error:", err)
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
+
+
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    let event
+
+    try {
+      const signature = req.headers["stripe-signature"]
+
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        signature,
+        process.env.STRIPE_WEBHOOK_SECRET
+      )
+    } catch (err) {
+      console.error("Stripe webhook signature failed:", err.message)
+      return res.status(400).send(`Webhook Error: ${err.message}`)
+    }
+
+    try {
+      if (event.type !== "checkout.session.completed") {
+        return res.status(200).send("ignored")
+      }
+
+      const session = event.data.object
+
+      if (session.payment_status !== "paid") {
+        return res.status(200).send("not paid")
+      }
+
+      const orderId = session.metadata?.order_id
+      const userId = session.metadata?.user_id
+      const credits = Number(session.metadata?.credits || 0)
+
+      if (!orderId || !userId || !Number.isFinite(credits) || credits <= 0) {
+        return res.status(400).send("missing metadata")
+      }
+
+      const { data: existing, error: findErr } = await supabase
+        .from("credit_topups")
+        .select("*")
+        .eq("provider_order_id", orderId)
+        .eq("provider", "stripe")
+        .single()
+
+      if (findErr || !existing) {
+        return res.status(404).send("topup not found")
+      }
+
+      if (existing.status === "finished") {
+        return res.status(200).send("already processed")
+      }
+
+      const { data: wallet, error: walletErr } = await supabase
+        .from("wallets")
+        .select("credit_balance")
+        .eq("user_id", userId)
+        .single()
+
+      if (walletErr || !wallet) {
+        return res.status(500).send("wallet not found")
+      }
+
+      const newBalance = Number(wallet.credit_balance || 0) + Number(existing.credits || credits)
+
+      const { error: updateWalletErr } = await supabase
+        .from("wallets")
+        .update({ credit_balance: newBalance })
+        .eq("user_id", userId)
+
+      if (updateWalletErr) {
+        return res.status(500).send("wallet update failed")
+      }
+
+      await supabase
+        .from("credit_topups")
+        .update({
+          status: "finished",
+          paid_at: existing.paid_at || new Date().toISOString(),
+          provider_payment_id: session.id,
+        })
+        .eq("id", existing.id)
+
+      await supabase.from("credit_transactions").insert({
+        user_id: userId,
+        amount: Number(existing.credits || credits),
+        type: "stripe_topup",
+      })
+
+      await supabase.from("orders").insert({
+        user_id: userId,
+        product_name: `Credits top-up (Stripe)`,
+        amount: Number(existing.credits || credits),
+        status: "paid",
+      })
+
+      return res.status(200).send("ok")
+    } catch (err) {
+      console.error("stripe webhook fatal error:", err)
+      return res.status(500).send(String(err))
+    }
+  }
+)
+
+
 
 async function fetchNowPaymentsPaymentStatus(paymentId) {
   const r = await fetch(`https://api.nowpayments.io/v1/payment/${paymentId}`, {
