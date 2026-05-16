@@ -962,7 +962,7 @@ app.post("/api/stripe/create-credit-checkout", async (req, res) => {
             currency: "usd",
             unit_amount: amountCents,
             product_data: {
-              name: `${credits} Followers.com Credits`,
+              name: `${credits} Credits`,
               description: `$${usdAmount.toFixed(2)} credit top-up`,
             },
           },
