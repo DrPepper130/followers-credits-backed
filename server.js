@@ -2463,16 +2463,23 @@ app.get("/api/history/my-history", async (req, res) => {
       })
     }
 
-    const normalizedOrders = (orders || []).map((order) => ({
-      id: `order-${order.id}`,
-      entry_type: "order",
-      title: order.product_name || "Order",
-      username: order.instagram_username || "",
-      quantity: order.quantity ?? null,
-      credits: -Math.abs(Number(order.amount || 0)),
-      status: order.status || "completed",
-      created_at: order.created_at,
-    }))
+    const normalizedOrders = (orders || []).map((order) => {
+      const title = String(order.product_name || "Order")
+      const isCreditTopup = title.toLowerCase().includes("credits top-up")
+
+      return {
+        id: `order-${order.id}`,
+        entry_type: isCreditTopup ? "task_reward" : "order",
+        title,
+        username: order.instagram_username || "",
+        quantity: order.quantity ?? null,
+        credits: isCreditTopup
+          ? Math.abs(Number(order.amount || 0))
+          : -Math.abs(Number(order.amount || 0)),
+        status: order.status || "completed",
+        created_at: order.created_at,
+      }
+    })
 
     const normalizedTaskRewards = (taskRewards || []).map((task) => ({
       id: `task-${task.id}`,
