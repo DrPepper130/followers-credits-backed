@@ -953,7 +953,7 @@ app.post("/api/stripe/create-credit-checkout", async (req, res) => {
       mode: "payment",
       client_reference_id: orderId,
       customer_email: user.email || undefined,
-      success_url: `${appBase}/dashboard`,
+      success_url: `${appBase}/order-history`,
       cancel_url: `${appBase}/add-credits?stripeTopup=cancelled`,
       line_items: [
         {
