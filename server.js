@@ -1159,7 +1159,15 @@ app.post(
       }
 
       const session = event.data.object
+
+      // =========================
+      // Guest product order checkout
+      // =========================
       if (session.metadata?.type === "guest_product_order") {
+        if (session.payment_status !== "paid") {
+          return res.status(200).send("not paid")
+        }
+
         const orderId = session.metadata.order_id
 
         const { data: existing, error: findErr } = await supabase
@@ -1173,11 +1181,7 @@ app.post(
           return res.status(404).send("guest order not found")
         }
 
-        if (existing.status === "finished") {
-          return res.status(200).send("already processed")
-        }
-
-        await supabase
+        const { data: updatedRows, error: updateErr } = await supabase
           .from("guest_order_payments")
           .update({
             status: "finished",
@@ -1185,86 +1189,116 @@ app.post(
             provider_payment_id: session.id,
           })
           .eq("id", existing.id)
+          .neq("status", "finished")
+          .select("*")
 
-        await sendGuestOrderToMake({
-          ...existing,
-          status: "finished",
-          paid_at: new Date().toISOString(),
-        })
+        if (updateErr) {
+          return res.status(500).send("failed to update guest order")
+        }
+
+        if (!updatedRows || updatedRows.length === 0) {
+          return res.status(200).send("already processed")
+        }
+
+        const updatedRow = updatedRows[0]
+
+        try {
+          await maybeDispatchGuestMakeWebhook(supabase, updatedRow)
+        } catch (webhookErr) {
+          console.error("guest stripe Make webhook dispatch failed", webhookErr)
+
+          await supabase
+            .from("guest_order_payments")
+            .update({
+              webhook_last_error:
+                webhookErr.message || "Unknown webhook error",
+            })
+            .eq("id", updatedRow.id)
+        }
 
         return res.status(200).send("guest stripe order processed")
       }
-      if (session.payment_status !== "paid") {
-        return res.status(200).send("not paid")
-      }
 
-      const orderId = session.metadata?.order_id
-      const userId = session.metadata?.user_id
-      const credits = Number(session.metadata?.credits || 0)
+      // =========================
+      // Logged-in credit top-up checkout
+      // =========================
+      if (session.metadata?.type === "credit_topup") {
+        if (session.payment_status !== "paid") {
+          return res.status(200).send("not paid")
+        }
 
-      if (!orderId || !userId || !Number.isFinite(credits) || credits <= 0) {
-        return res.status(400).send("missing metadata")
-      }
+        const orderId = session.metadata?.order_id
+        const userId = session.metadata?.user_id
+        const credits = Number(session.metadata?.credits || 0)
 
-      const { data: existing, error: findErr } = await supabase
-        .from("credit_topups")
-        .select("*")
-        .eq("provider_order_id", orderId)
-        .eq("provider", "stripe")
-        .single()
+        if (!orderId || !userId || !Number.isFinite(credits) || credits <= 0) {
+          return res.status(400).send("missing metadata")
+        }
 
-      if (findErr || !existing) {
-        return res.status(404).send("topup not found")
-      }
+        const { data: existing, error: findErr } = await supabase
+          .from("credit_topups")
+          .select("*")
+          .eq("provider_order_id", orderId)
+          .eq("provider", "stripe")
+          .single()
 
-      if (existing.status === "finished") {
-        return res.status(200).send("already processed")
-      }
+        if (findErr || !existing) {
+          return res.status(404).send("topup not found")
+        }
 
-      const { data: wallet, error: walletErr } = await supabase
-        .from("wallets")
-        .select("credit_balance")
-        .eq("user_id", userId)
-        .single()
+        if (existing.status === "finished") {
+          return res.status(200).send("already processed")
+        }
 
-      if (walletErr || !wallet) {
-        return res.status(500).send("wallet not found")
-      }
+        const { data: wallet, error: walletErr } = await supabase
+          .from("wallets")
+          .select("credit_balance")
+          .eq("user_id", userId)
+          .single()
 
-      const newBalance = Number(wallet.credit_balance || 0) + Number(existing.credits || credits)
+        if (walletErr || !wallet) {
+          return res.status(500).send("wallet not found")
+        }
 
-      const { error: updateWalletErr } = await supabase
-        .from("wallets")
-        .update({ credit_balance: newBalance })
-        .eq("user_id", userId)
+        const newBalance =
+          Number(wallet.credit_balance || 0) +
+          Number(existing.credits || credits)
 
-      if (updateWalletErr) {
-        return res.status(500).send("wallet update failed")
-      }
+        const { error: updateWalletErr } = await supabase
+          .from("wallets")
+          .update({ credit_balance: newBalance })
+          .eq("user_id", userId)
 
-      await supabase
-        .from("credit_topups")
-        .update({
-          status: "finished",
-          paid_at: existing.paid_at || new Date().toISOString(),
-          provider_payment_id: session.id,
+        if (updateWalletErr) {
+          return res.status(500).send("wallet update failed")
+        }
+
+        await supabase
+          .from("credit_topups")
+          .update({
+            status: "finished",
+            paid_at: existing.paid_at || new Date().toISOString(),
+            provider_payment_id: session.id,
+          })
+          .eq("id", existing.id)
+
+        await supabase.from("credit_transactions").insert({
+          user_id: userId,
+          amount: Number(existing.credits || credits),
+          type: "stripe_topup",
         })
-        .eq("id", existing.id)
 
-      await supabase.from("credit_transactions").insert({
-        user_id: userId,
-        amount: Number(existing.credits || credits),
-        type: "stripe_topup",
-      })
+        await supabase.from("orders").insert({
+          user_id: userId,
+          product_name: `Credits top-up (Stripe)`,
+          amount: Number(existing.credits || credits),
+          status: "paid",
+        })
 
-      await supabase.from("orders").insert({
-        user_id: userId,
-        product_name: `Credits top-up (Stripe)`,
-        amount: Number(existing.credits || credits),
-        status: "paid",
-      })
+        return res.status(200).send("credit topup processed")
+      }
 
-      return res.status(200).send("ok")
+      return res.status(200).send("unknown checkout type")
     } catch (err) {
       console.error("stripe webhook fatal error:", err)
       return res.status(500).send(String(err))
