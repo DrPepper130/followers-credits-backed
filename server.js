@@ -1159,7 +1159,41 @@ app.post(
       }
 
       const session = event.data.object
+      if (session.metadata?.type === "guest_product_order") {
+        const orderId = session.metadata.order_id
 
+        const { data: existing, error: findErr } = await supabase
+          .from("guest_order_payments")
+          .select("*")
+          .eq("provider_order_id", orderId)
+          .eq("provider", "stripe")
+          .single()
+
+        if (findErr || !existing) {
+          return res.status(404).send("guest order not found")
+        }
+
+        if (existing.status === "finished") {
+          return res.status(200).send("already processed")
+        }
+
+        await supabase
+          .from("guest_order_payments")
+          .update({
+            status: "finished",
+            paid_at: existing.paid_at || new Date().toISOString(),
+            provider_payment_id: session.id,
+          })
+          .eq("id", existing.id)
+
+        await sendGuestOrderToMake({
+          ...existing,
+          status: "finished",
+          paid_at: new Date().toISOString(),
+        })
+
+        return res.status(200).send("guest stripe order processed")
+      }
       if (session.payment_status !== "paid") {
         return res.status(200).send("not paid")
       }
