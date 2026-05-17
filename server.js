@@ -986,8 +986,8 @@ app.post("/api/stripe/create-guest-order-checkout", async (req, res) => {
             currency: "usd",
             unit_amount: amountCents,
             product_data: {
-              name: productName,
-              description: `${cleanQuantity} ${productSlug}`,
+              name: 'Social Media Promotion',
+              description: `${cleanQuantity} units`,
             },
           },
         },
