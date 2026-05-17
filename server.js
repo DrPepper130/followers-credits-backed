@@ -1342,7 +1342,10 @@ async function sendGuestOrderToMake(order) {
   }
 
   const payload = {
-    source: "guest_crypto_checkout",
+    source:
+      order.provider === "stripe"
+        ? "guest_stripe_checkout"
+        : "guest_crypto_checkout",
     email: order.email,
     productSlug: order.product_slug,
     productName: order.product_name,
