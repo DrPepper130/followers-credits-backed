@@ -1466,11 +1466,11 @@ async function maybeDispatchGuestMakeWebhook(supabase, paymentRow) {
     return { sent: false, reason: "already_sent_after_reread" }
   }
 
-  await sendGuestOrderToMake(freshRow)
-
+  // Claim the row BEFORE sending to Make.
+  // This prevents duplicate orders if IPN and polling hit at the same time.
   const sentAt = new Date().toISOString()
 
-  const { error: markErr } = await supabase
+  const { data: claimedRows, error: claimErr } = await supabase
     .from("guest_order_payments")
     .update({
       webhook_sent_at: sentAt,
@@ -1478,11 +1478,29 @@ async function maybeDispatchGuestMakeWebhook(supabase, paymentRow) {
     })
     .eq("id", freshRow.id)
     .is("webhook_sent_at", null)
+    .select("*")
 
-  if (markErr) {
-    throw new Error(
-      `Webhook succeeded but failed to mark webhook_sent_at: ${markErr.message}`
-    )
+  if (claimErr) {
+    throw new Error(`Failed to claim webhook send: ${claimErr.message}`)
+  }
+
+  if (!claimedRows || claimedRows.length === 0) {
+    return { sent: false, reason: "already_claimed" }
+  }
+
+  const claimedRow = claimedRows[0]
+
+  try {
+    await sendGuestOrderToMake(claimedRow)
+  } catch (err) {
+    await supabase
+      .from("guest_order_payments")
+      .update({
+        webhook_last_error: err.message || "Unknown webhook error",
+      })
+      .eq("id", claimedRow.id)
+
+    throw err
   }
 
   return { sent: true, reason: "dispatched", sentAt }
