@@ -926,6 +926,114 @@ app.get("/", (req, res) => {
 
 
 
+app.post("/api/stripe/create-guest-order-checkout", async (req, res) => {
+  try {
+    const {
+      productSlug,
+      productName,
+      unitPriceUsd,
+      quantity,
+      email,
+      targetValue,
+      returnPath,
+      minQty,
+      maxQty,
+    } = req.body
+
+    const cleanQuantity = Number(quantity)
+    const cleanUnitPriceUsd = Number(unitPriceUsd)
+    const cleanEmail = String(email || "").trim().toLowerCase()
+    const cleanTargetValue = String(targetValue || "").trim()
+
+    if (!productSlug || !productName) {
+      return res.status(400).json({ error: "Missing product" })
+    }
+
+    if (!cleanEmail.includes("@")) {
+      return res.status(400).json({ error: "Valid email required" })
+    }
+
+    if (!cleanTargetValue) {
+      return res.status(400).json({ error: "Missing target value" })
+    }
+
+    if (!Number.isFinite(cleanQuantity) || cleanQuantity <= 0) {
+      return res.status(400).json({ error: "Invalid quantity" })
+    }
+
+    if (cleanQuantity < Number(minQty) || cleanQuantity > Number(maxQty)) {
+      return res.status(400).json({ error: "Invalid quantity range" })
+    }
+
+    const usdAmount = Number((cleanQuantity * cleanUnitPriceUsd).toFixed(2))
+    const amountCents = Math.round(usdAmount * 100)
+
+    const orderId = `stripe_guest_${Date.now()}_${Math.random()
+      .toString(36)
+      .slice(2, 10)}`
+
+    const appBase = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "")
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      customer_email: cleanEmail,
+      success_url: `${appBase}${returnPath}?checkout=stripe&orderId=${encodeURIComponent(orderId)}&email=${encodeURIComponent(cleanEmail)}`,
+      cancel_url: `${appBase}${returnPath}`,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            unit_amount: amountCents,
+            product_data: {
+              name: productName,
+              description: `${cleanQuantity} ${productSlug}`,
+            },
+          },
+        },
+      ],
+      metadata: {
+        type: "guest_product_order",
+        order_id: orderId,
+        email: cleanEmail,
+        product_slug: productSlug,
+        product_name: productName,
+        target_value: cleanTargetValue,
+        quantity: String(cleanQuantity),
+        usd_amount: String(usdAmount),
+      },
+    })
+
+    await supabase.from("guest_order_payments").insert({
+      email: cleanEmail,
+      product_slug: productSlug,
+      product_name: productName,
+      instagram_username: cleanTargetValue,
+      quantity: cleanQuantity,
+      unit_price_usd: cleanUnitPriceUsd,
+      usd_amount: usdAmount,
+      provider: "stripe",
+      provider_payment_id: session.id,
+      provider_order_id: orderId,
+      status: "created",
+      invoice_url: session.url,
+      checkout_return_url: `${appBase}${returnPath}`,
+    })
+
+    return res.json({
+      success: true,
+      checkoutUrl: session.url,
+      orderId,
+      usdAmount,
+    })
+  } catch (err) {
+    console.error("stripe guest checkout error:", err)
+    return res.status(500).json({ error: "Server error", details: String(err) })
+  }
+})
+
+
+
 app.post("/api/stripe/create-credit-checkout", async (req, res) => {
   try {
     const user = await requireUser(req, res)
