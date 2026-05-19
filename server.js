@@ -1495,6 +1495,21 @@ async function maybeDispatchGuestMakeWebhook(supabase, paymentRow) {
 
   try {
     await sendGuestOrderToMake(claimedRow)
+
+    await sendProveSourceOrderPing({
+      source:
+        claimedRow.provider === "stripe"
+          ? "guest_stripe_checkout"
+          : "guest_crypto_checkout",
+      orderId: claimedRow.provider_order_id,
+      email: claimedRow.email,
+      productSlug: claimedRow.product_slug,
+      productName: claimedRow.product_name,
+      targetValue: claimedRow.instagram_username,
+      quantity: claimedRow.quantity,
+      usdAmount: claimedRow.usd_amount,
+      paymentMethod: claimedRow.provider,
+    })
   } catch (err) {
     await supabase
       .from("guest_order_payments")
@@ -1508,6 +1523,48 @@ async function maybeDispatchGuestMakeWebhook(supabase, paymentRow) {
 
   return { sent: true, reason: "dispatched", sentAt }
 }
+
+
+
+async function sendProveSourceOrderPing(order) {
+  const webhookUrl =
+    process.env.PROVESOURCE_WEBHOOK_URL ||
+    "https://hook.us2.make.com/sr9xmpaqrtggaqi7fnxss9bbrwh9kwxq"
+
+  const payload = {
+    source: order.source || "followers_order",
+    orderId: order.orderId || order.id || "",
+    email: order.email || "",
+    productSlug: order.productSlug || order.product_slug || "",
+    productName: order.productName || order.product_name || "",
+    targetValue:
+      order.targetValue ||
+      order.instagramUsername ||
+      order.instagram_username ||
+      "",
+    quantity: order.quantity || 1,
+    usdAmount: order.usdAmount || order.usd_amount || 0,
+    paymentMethod: order.paymentMethod || "",
+    createdAt: order.createdAt || new Date().toISOString(),
+  }
+
+  try {
+    const resp = await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "")
+      console.error("ProveSource ping failed:", resp.status, text)
+    }
+  } catch (err) {
+    console.error("ProveSource ping error:", err)
+  }
+}
+
+
 
 app.get("/api/orders/guest-payment-status", async (req, res) => {
   try {
@@ -2550,6 +2607,20 @@ app.post("/api/orders/create", async (req, res) => {
       deliveryMessage = `Your code: ${codeReservation.code}`
     }
 
+    await sendProveSourceOrderPing({
+      source: "credits_checkout",
+      orderId: order.id,
+      userId: user.id,
+      productSlug,
+      productName,
+      email: user.email || "",
+      targetValue: cleanTargetValue,
+      quantity: cleanQuantity,
+      usdAmount,
+      creditCost,
+      paymentMethod: "credits",
+    })
+    
     return res.json({
       success: true,
       orderId: order.id,
