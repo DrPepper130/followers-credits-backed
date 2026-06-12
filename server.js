@@ -1590,7 +1590,28 @@ app.get("/api/orders/guest-payment-status", async (req, res) => {
     if (localErr || !localRow) {
       return res.status(404).json({ error: "Payment not found" })
     }
+    
+    if (localRow.provider === "stripe") {
+      if (localRow.status === "finished") {
+        try {
+          await maybeDispatchGuestMakeWebhook(supabase, localRow)
+        } catch (err) {
+          console.error("stripe guest webhook dispatch failed", err)
+        }
+      }
 
+      return res.json({
+        orderId: localRow.provider_order_id,
+        status: localRow.status,
+        quantity: localRow.quantity,
+        usdAmount: localRow.usd_amount,
+        productName: localRow.product_name,
+        instagramUsername: localRow.instagram_username,
+        paidAt: localRow.paid_at,
+      })
+    }
+    
+    
     let finalRow = localRow
     const localStatus = String(localRow.status || "").toLowerCase()
 
