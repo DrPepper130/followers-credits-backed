@@ -119,6 +119,153 @@ async function reserveNextProductCode({ productSlug, userId, orderId }) {
   }
 }
 
+
+app.post("/api/support/request", async (req, res) => {
+  try {
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const rawOrderId = String(req.body.orderId || "").replace("order-", "").trim()
+    const orderId = Number(rawOrderId)
+    const requestType = String(req.body.requestType || "").trim().toLowerCase()
+
+    const validTypes = ["refill", "cancel", "speed_up"]
+
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ error: "Invalid order ID" })
+    }
+
+    if (!validTypes.includes(requestType)) {
+      return res.status(400).json({ error: "Invalid request type" })
+    }
+
+    const { data: order, error: orderErr } = await supabase
+      .from("orders")
+      .select("id, user_id, product_name, quantity, instagram_username")
+      .eq("id", orderId)
+      .eq("user_id", user.id)
+      .single()
+
+    if (orderErr || !order) {
+      return res.status(404).json({ error: "Order not found" })
+    }
+
+    const { data, error } = await supabase
+      .from("support_requests")
+      .insert({
+        user_id: user.id,
+        order_id: order.id,
+        request_type: requestType,
+        status: "open",
+        order_title: order.product_name,
+        order_target: order.instagram_username,
+        order_quantity: order.quantity,
+      })
+      .select()
+      .single()
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to create support request",
+        details: error.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      request: data,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+app.get("/api/admin/support-requests", async (req, res) => {
+  try {
+    const adminUser = await requireAdmin(req, res)
+    if (!adminUser) return
+
+    const status = String(req.query.status || "open").trim().toLowerCase()
+
+    const query = supabase
+      .from("support_requests")
+      .select("*")
+      .order("created_at", { ascending: false })
+
+    if (status !== "all") {
+      query.eq("status", status)
+    }
+
+    const { data, error } = await query
+
+    if (error) {
+      return res.status(500).json({
+        error: "Failed to load support requests",
+        details: error.message,
+      })
+    }
+
+    return res.json(data || [])
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+app.post("/api/admin/support-requests/:id/update", async (req, res) => {
+  try {
+    const adminUser = await requireAdmin(req, res)
+    if (!adminUser) return
+
+    const id = Number(req.params.id)
+    const status = String(req.body.status || "").trim().toLowerCase()
+    const adminNotes = String(req.body.adminNotes || "").trim()
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Invalid request ID" })
+    }
+
+    if (!["open", "done", "ignored"].includes(status)) {
+      return res.status(400).json({ error: "Invalid status" })
+    }
+
+    const { data, error } = await supabase
+      .from("support_requests")
+      .update({
+        status,
+        admin_notes: adminNotes || null,
+        reviewed_at: status === "open" ? null : new Date().toISOString(),
+        reviewed_by: status === "open" ? null : adminUser.id,
+      })
+      .eq("id", id)
+      .select()
+      .single()
+
+    if (error || !data) {
+      return res.status(404).json({
+        error: "Support request not found",
+        details: error?.message,
+      })
+    }
+
+    return res.json({
+      success: true,
+      request: data,
+    })
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    })
+  }
+})
+
+
 app.post("/api/admin/codes/add", async (req, res) => {
   try {
     const adminUser = await requireAdmin(req, res)
