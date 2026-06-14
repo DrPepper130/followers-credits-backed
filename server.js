@@ -234,6 +234,104 @@ app.post("/api/admin/support-requests/:id/update", async (req, res) => {
       return res.status(400).json({ error: "Invalid status" })
     }
 
+    const { data: supportRequest, error: requestErr } = await supabase
+      .from("support_requests")
+      .select("*")
+      .eq("id", id)
+      .single()
+
+    if (requestErr || !supportRequest) {
+      return res.status(404).json({ error: "Support request not found" })
+    }
+
+    if (supportRequest.status !== "open" && status === "done") {
+      return res.status(400).json({
+        error: "This request has already been reviewed",
+      })
+    }
+
+    let refundedCredits = 0
+    let newBalance = null
+
+    if (status === "done" && supportRequest.request_type === "cancel") {
+      const { data: order, error: orderErr } = await supabase
+        .from("orders")
+        .select("id, user_id, amount, status")
+        .eq("id", supportRequest.order_id)
+        .single()
+
+      if (orderErr || !order) {
+        return res.status(404).json({ error: "Order not found" })
+      }
+
+      const refundAmount = Number(order.amount || 0)
+
+      if (!Number.isFinite(refundAmount) || refundAmount <= 0) {
+        return res.status(400).json({ error: "Invalid refund amount" })
+      }
+
+      const { data: existingRefund } = await supabase
+        .from("credit_transactions")
+        .select("id")
+        .eq("user_id", order.user_id)
+        .eq("type", "cancel_refund")
+        .eq("related_order_id", order.id)
+        .maybeSingle()
+
+      if (existingRefund) {
+        return res.status(400).json({
+          error: "This order has already been refunded",
+        })
+      }
+
+      const { data: wallet, error: walletErr } = await supabase
+        .from("wallets")
+        .select("credit_balance")
+        .eq("user_id", order.user_id)
+        .single()
+
+      if (walletErr || !wallet) {
+        return res.status(500).json({ error: "Wallet not found" })
+      }
+
+      newBalance = Number(wallet.credit_balance || 0) + refundAmount
+
+      const { error: walletUpdateErr } = await supabase
+        .from("wallets")
+        .update({ credit_balance: newBalance })
+        .eq("user_id", order.user_id)
+
+      if (walletUpdateErr) {
+        return res.status(500).json({
+          error: "Failed to refund wallet",
+          details: walletUpdateErr.message,
+        })
+      }
+
+      const { error: txErr } = await supabase
+        .from("credit_transactions")
+        .insert({
+          user_id: order.user_id,
+          amount: refundAmount,
+          type: "cancel_refund",
+          related_order_id: order.id,
+        })
+
+      if (txErr) {
+        return res.status(500).json({
+          error: "Refund added, but failed to log transaction",
+          details: txErr.message,
+        })
+      }
+
+      await supabase
+        .from("orders")
+        .update({ status: "canceled" })
+        .eq("id", order.id)
+
+      refundedCredits = refundAmount
+    }
+
     const { data, error } = await supabase
       .from("support_requests")
       .update({
@@ -247,8 +345,8 @@ app.post("/api/admin/support-requests/:id/update", async (req, res) => {
       .single()
 
     if (error || !data) {
-      return res.status(404).json({
-        error: "Support request not found",
+      return res.status(500).json({
+        error: "Failed to update support request",
         details: error?.message,
       })
     }
@@ -256,6 +354,8 @@ app.post("/api/admin/support-requests/:id/update", async (req, res) => {
     return res.json({
       success: true,
       request: data,
+      refundedCredits,
+      newBalance,
     })
   } catch (err) {
     return res.status(500).json({
@@ -264,7 +364,6 @@ app.post("/api/admin/support-requests/:id/update", async (req, res) => {
     })
   }
 })
-
 
 app.post("/api/admin/codes/add", async (req, res) => {
   try {
