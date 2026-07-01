@@ -29,7 +29,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
+const OLD_DOMAIN = "followers.com"
+const NEW_DOMAIN = "autobotssales.com"
 
+function migrateOldDomain(value) {
+  return String(value || "").replaceAll(OLD_DOMAIN, NEW_DOMAIN)
+}
+
+const APP_BASE_URL = migrateOldDomain(
+  process.env.APP_BASE_URL || `https://${NEW_DOMAIN}`
+).replace(/\/+$/, "")
+
+const BACKEND_BASE_URL = migrateOldDomain(
+  process.env.BACKEND_BASE_URL || ""
+).replace(/\/+$/, "")
 
 function getBearerToken(req) {
   const authHeader = req.headers.authorization || ""
@@ -1218,7 +1231,7 @@ app.post("/api/stripe/create-guest-order-checkout", async (req, res) => {
       .toString(36)
       .slice(2, 10)}`
 
-    const appBase = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "")
+    const appBase = APP_BASE_URL
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -1301,7 +1314,7 @@ app.post("/api/stripe/create-credit-checkout", async (req, res) => {
 
     const orderId = `stripe_credit_${user.id}_${Date.now()}`
 
-    const appBase = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "")
+    const appBase = APP_BASE_URL
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -1778,7 +1791,7 @@ async function sendProveSourceOrderPing(order) {
     "https://hook.us2.make.com/sr9xmpaqrtggaqi7fnxss9bbrwh9kwxq"
 
   const payload = {
-    source: order.source || "followers_order",
+    source: order.source || "autobotssales_order",
     orderId: order.orderId || order.id || "",
     email: order.email || "",
     productSlug: order.productSlug || order.product_slug || "",
@@ -2193,7 +2206,7 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
       .toString(36)
       .slice(2, 10)}`
 
-    const appBase = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "")
+    const appBase = APP_BASE_URL
     const returnUrl =
       `${appBase}${cleanReturnPath}` +
       `?orderId=${encodeURIComponent(providerOrderId)}` +
@@ -2205,7 +2218,7 @@ app.post("/api/orders/create-guest-payment", async (req, res) => {
       price_currency: "usd",
       order_id: providerOrderId,
       order_description: `${productName} for ${cleanTargetValue} (${cleanQuantity})`,
-      ipn_callback_url: `${process.env.BACKEND_BASE_URL}/api/nowpayments/guest-ipn`,
+      ipn_callback_url: `${BACKEND_BASE_URL}/api/nowpayments/guest-ipn`,
       success_url: returnUrl,
       cancel_url: returnUrl,
     }
@@ -2438,9 +2451,9 @@ app.post("/api/nowpayments/create-payment", async (req, res) => {
       pay_currency: payCurrency,
       order_id: orderId,
       order_description: `Credits top-up ${packageLabel}`,
-      ipn_callback_url: `${process.env.BACKEND_BASE_URL}/api/nowpayments/ipn`,
-      success_url: `${process.env.APP_BASE_URL}/dashboard`,
-      cancel_url: `${process.env.APP_BASE_URL}/add-credits`,
+      ipn_callback_url: `${BACKEND_BASE_URL}/api/nowpayments/ipn`,
+      success_url: `${APP_BASE_URL}/dashboard`,
+      cancel_url: `${APP_BASE_URL}/add-credits`,
     }
 
     const r = await fetch("https://api.nowpayments.io/v1/payment", {
